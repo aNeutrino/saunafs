@@ -7,7 +7,7 @@ assert_program_installed polonaise-fuse-client
 
 CHUNKSERVERS=1 \
 	USE_RAMDISK=YES \
-	MOUNT_EXTRA_CONFIG="sfscachemode=NEVER" \
+	MOUNT_EXTRA_CONFIG="mfscachemode=NEVER" \
 	setup_local_empty_saunafs info
 
 MINIMUM_PARALLEL_JOBS=4

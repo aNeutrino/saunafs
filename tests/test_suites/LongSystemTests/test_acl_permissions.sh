@@ -7,7 +7,7 @@ CHUNKSERVERS=1 \
 	USE_RAMDISK=YES \
 	SAFS_MOUNT_COMMAND=sfsmount \
 	SFSEXPORTS_EXTRA_OPTIONS=nomasterpermcheck,ignoregid \
-	MOUNT_EXTRA_CONFIG="sfscachemode=NEVER" \
+	MOUNT_EXTRA_CONFIG="mfscachemode=NEVER" \
 	setup_local_empty_saunafs info
 
 saudir="${info[mount0]}/subdir"
