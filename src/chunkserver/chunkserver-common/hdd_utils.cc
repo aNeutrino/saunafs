@@ -163,6 +163,12 @@ void hddAdviseNoCache(IChunk *chunk) {
 	}
 }
 
+void hddAdviseNoCacheForFD([[maybe_unused]] int fd) {
+#ifdef SAUNAFS_HAVE_POSIX_FADVISE
+	posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#endif
+}
+
 int hddIOEnd(IChunk *chunk) {
 	assert(chunk);
 	TRACETHIS1(chunk->id());

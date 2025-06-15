@@ -72,6 +72,9 @@ void hddChunkRelease(IChunk *chunk);
 /// Advises the kernel that the chunk should not be cached (meta and data files)
 void hddAdviseNoCache(IChunk *chunk);
 
+/// Advises the kernel that the file descriptor should not be cached
+void hddAdviseNoCacheForFD([[maybe_unused]] int fd);
+
 int hddIOEnd(IChunk *chunk);
 
 int hddIOBegin(IChunk *chunk, int newFlag,
