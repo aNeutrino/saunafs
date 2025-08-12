@@ -21,6 +21,31 @@ shared_add_library(sfscommon ${COMMON_SOURCES})
 shared_target_link_libraries(sfscommon STATIC sfserr SHARED sfserr_pic)
 shared_target_link_libraries(sfscommon STATIC slogger SHARED slogger_pic)
 
+find_package(GnuTLS REQUIRED)
+
+# Link GnuTLS itself
+shared_target_link_libraries(sfscommon ${GNUTLS_LIBRARIES})
+
+if(NOT BUILD_SHARED_LIBS)
+  find_package(Nettle QUIET)
+  find_package(Libtasn1 QUIET)
+  find_package(GMP QUIET)
+  find_package(Unistring QUIET)
+  find_package(Idn2 QUIET)
+
+  if(Nettle_FOUND AND Libtasn1_FOUND AND GMP_FOUND AND Unistring_FOUND AND Idn2_FOUND)
+    shared_target_link_libraries(sfscommon
+      ${NETTLE_LIBRARIES}
+      ${LIBTASN1_LIBRARIES}
+      ${GMP_LIBRARIES}
+      ${UNISTRING_LIBRARIES}
+      ${IDN2_LIBRARIES})
+  else()
+    # fallback names for vcpkg or common static libs, adjust if needed
+    shared_target_link_libraries(sfscommon hogweed nettle tasn1 gmp unistring idn2)  # add idn2 here too
+  endif()
+endif()
+
 if (HAVE_CRCUTIL)
   # Use crcutil Library
   include_directories(SYSTEM ${CRCUTIL_INCLUDE_DIRS}) # skip compiler warnings for external crcutil headers

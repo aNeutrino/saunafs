@@ -132,6 +132,13 @@ struct FsInitParams {
 	static constexpr unsigned kDefaultAclCacheSize = 1000;
 	static constexpr bool     kDefaultVerbose = false;
 	static constexpr bool     kDirectIO = false;
+
+	// TLS related parameters
+	static constexpr bool     kDefaultTlsEnabled = false;
+	static constexpr const char *kDefaultTlsCertFile = "";
+	static constexpr const char *kDefaultTlsKeyFile = "";
+	static constexpr const char *kDefaultTlsServerCACertDir = "";
+
 	// Thank you, GCC 4.6, for no delegating constructors
 	FsInitParams()
 	             : bind_host(), host(), port(), meta(false), mountpoint(), subfolder(kDefaultSubfolder),
@@ -178,7 +185,11 @@ struct FsInitParams {
 	             mastercomm_sleep_time_divisor(kDefaultMasterCommSleepTimeDivisor),
 	             verbose(kDefaultVerbose), direct_io(kDirectIO),
 	             log_notifications_area(kDefaultLogNotificationArea),
-	             message_suppression_period(kDefaultMessageSuppressionPeriod) {
+	             message_suppression_period(kDefaultMessageSuppressionPeriod),
+	             tls_enabled(kDefaultTlsEnabled), 
+	             tls_cert_file(kDefaultTlsCertFile),
+	             tls_key_file(kDefaultTlsKeyFile),
+	             tls_server_ca_cert_dir(kDefaultTlsServerCACertDir) {
 	}
 
 	FsInitParams(const std::string &bind_host, const std::string &host, const std::string &port, const std::string &mountpoint)
@@ -226,7 +237,11 @@ struct FsInitParams {
 	             mastercomm_sleep_time_divisor(kDefaultMasterCommSleepTimeDivisor),
 	             verbose(kDefaultVerbose), direct_io(kDirectIO),
 	             log_notifications_area(kDefaultLogNotificationArea),
-	             message_suppression_period(kDefaultMessageSuppressionPeriod) {
+	             message_suppression_period(kDefaultMessageSuppressionPeriod),
+	             tls_enabled(kDefaultTlsEnabled), 
+	             tls_cert_file(kDefaultTlsCertFile),
+	             tls_key_file(kDefaultTlsKeyFile),
+	             tls_server_ca_cert_dir(kDefaultTlsServerCACertDir) {
 	}
 
 	std::string bind_host;
@@ -296,6 +311,12 @@ struct FsInitParams {
 	bool direct_io;
 	int log_notifications_area;
 	unsigned message_suppression_period;
+
+	// TLS related parameters
+	bool tls_enabled;
+	std::string tls_cert_file;
+	std::string tls_key_file;
+	std::string tls_server_ca_cert_dir;
 
 	std::string io_limits_config_file;
 };

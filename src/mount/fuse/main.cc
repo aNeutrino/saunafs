@@ -273,6 +273,10 @@ static int mainloop(struct fuse_args *args, struct fuse_cmdline_opts *fuse_opts,
 	params.use_quota_in_volume_size = gMountOptions.usequotainvolumesize;
 	params.max_wait_retry_time = gMountOptions.maxwaitretrytime;
 	params.mastercomm_sleep_time_divisor = gMountOptions.mastercommsleeptimedivisor;
+	params.tls_enabled = gMountOptions.tlsenabled;
+	params.tls_cert_file = gMountOptions.tlscertfile;
+	params.tls_key_file = gMountOptions.tlskeyfile;
+	params.tls_server_ca_cert_dir = gMountOptions.tlsservercacertdir;
 
 	if (!gMountOptions.meta) {
 		SaunaClient::fs_init(params);

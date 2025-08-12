@@ -29,6 +29,7 @@
 #include "config/cfg.h"
 #include "master/chartsdata.h"
 #include "master/datacachemgr.h"
+#include "master/encryption.h"
 #include "master/exports.h"
 #include "master/filesystem.h"
 #include "master/filesystem_freenode.h"
@@ -95,6 +96,7 @@ inline const std::vector<RunTab> runTabs = {
     // the lambda is used to select the correct fs_init overload
     RunTab{.function = []() { return fs_init(); }, .name = "file system manager"},
     RunTab{.function = chartsdata_init, .name = "charts module"},
+	RunTab{encryption_init,"encryption module"},
     RunTab{.function = masterconn_init, .name = "communication with master server"},
     RunTab{.function = matomlserv_init, .name = "communication with metalogger"},
     RunTab{.function = matocsserv_init, .name = "communication with chunkserver"},
