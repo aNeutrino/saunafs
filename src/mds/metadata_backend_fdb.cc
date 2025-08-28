@@ -466,6 +466,8 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 	kv::Key lastKey;
 	static constexpr size_t kChunkPageSize = 1000;  // Number of entries to fetch per page
 
+	uint64_t chunkCount = 0;
+
 	while (true) {
 		auto pageResult = transaction->getRange(startSelector, endSelector, kChunkPageSize);
 
@@ -488,6 +490,7 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 				chunk_add_from_initial_metadata_load(chunkId, chunkVersion, lockedTo, lockId);
 				safs::log_info("Loaded chunk: {} -> {} (lockedto: {}, lockid: {})", chunkId,
 				               chunkVersion, lockedTo, lockId);
+				chunkCount++;
 			}
 		}
 
@@ -498,6 +501,8 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 		lastKey = pageResult.getPairs().back().key;
 		startSelector = kv::KeySelector(lastKey, false, 0);
 	}
+
+	safs::log_info("Loaded {} chunks", chunkCount);
 
 	// Connect the signal handlers after initial loading
 
@@ -741,35 +746,37 @@ void MetadataBackendFDB::createConnections() {
 		}
 	});
 
-	// getChangelogSignal().connect([this](const ChangelogEvent &event) {
-	// 	static constexpr uint8_t kLogPrefixSize = 4;
-	// 	static kv::Key logKey{'L', 'O', 'G', '_', 'V', 'E', 'R', 'S', 'I', 'O', 'N', '_'};
-	// 	uint8_t *ptr = logKey.data() + kLogPrefixSize;
-	// 	put64bit(&ptr, event.version);
+	getChangelogSignal().connect([this](const ChangelogEvent &event) {
+		// static constexpr uint8_t kLogPrefixSize = 4;
+		// static kv::Key logKey{'L', 'O', 'G', '_', 'V', 'E', 'R', 'S', 'I', 'O', 'N', '_'};
+		// uint8_t *ptr = logKey.data() + kLogPrefixSize;
+		// put64bit(&ptr, event.version);
 
-	// 	// The log itself
-	// 	auto transaction = kvEngine_->createReadWriteTransaction();
-	// 	transaction->set(logKey, kv::toU8Vector(event.entry));
+		// // The log itself
+		// auto transaction = kvEngine_->createReadWriteTransaction();
+		// transaction->set(logKey, kv::toU8Vector(event.entry));
 
-	// 	// Then update the metadata version
-	// 	kv::Value serializedVersion;
-	// 	serialize(serializedVersion, event.version);
-	// 	transaction->set(kv::toU8Vector("META_VERSION"), serializedVersion);
+		// Then update the metadata version
+		static kv::Key versionKey{kv::toU8Vector("META_VERSION")};
+		kv::Value serializedVersion;
+		serialize(serializedVersion, event.version);
+		auto transaction = kvEngine_->createReadWriteTransaction();
+		transaction->set(versionKey, serializedVersion);
 
-	// 	if (!transaction->commit()) {
-	// 		safs::log_err("Failed to store changelog entry: {}", event.entry);
-	// 		return;
-	// 	}
+		if (!transaction->commit()) {
+			safs::log_err("Failed to store changelog entry: {}", event.entry);
+			return;
+		}
 
-	// 	auto committedVersion = transaction->getCommittedVersion();
+		// auto committedVersion = transaction->getCommittedVersion();
 
-	// 	if (committedVersion.has_value()) {
-	// 		safs::log_info("Commit: {}: {}|{}", committedVersion.value(), event.version,
-	// 		               event.entry);
-	// 	} else {
-	// 		safs::log_err("Changelog entry committed but version is not available");
-	// 	}
-	// });
+		// if (committedVersion.has_value()) {
+		// 	safs::log_info("Commit: {}: {}|{}", committedVersion.value(), event.version,
+		// 	               event.entry);
+		// } else {
+		// 	safs::log_err("Changelog entry committed but version is not available");
+		// }
+	});
 
 	gMetadata->nodeChangedSignal.connect([this](FSNode *node) {
 		auto transaction = kvEngine_->createReadWriteTransaction();
