@@ -562,6 +562,12 @@ void MetadataBackendFDB::loadall(int ignoreflag) {
 		throw MetadataConsistencyException(MetadataStructureReadErrorMsg);
 	}
 
+	safs::log_info("connecting files and chunks");
+	fs_add_files_to_chunks();
+
+	safs::log_info("calculating checksum of the metadata");
+	fs_checksum(ChecksumMode::kForceRecalculate);
+
 	safs_pretty_syslog(LOG_INFO,
 	                   "metadata read (%" PRIiNode " inodes including %" PRIiNode
 	                   " directory inodes, %" PRIiNode " file inodes, %" PRIiNode
