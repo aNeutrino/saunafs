@@ -455,6 +455,25 @@ int8_t MetadataBackendFDB::loadFree(bool ignoreFlag) {
 int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 	(void)ignoreFlag;  // Unused parameter
 
+	{
+		auto transaction = kvEngine_->createReadWriteTransaction();
+		// TODO(Guillex): use the name from the properties in gChunksMetadata
+		kv::Key key = kv::toU8Vector("META_NEXT_CHUNK_ID");
+		transaction->get(key);
+
+		auto value = transaction->get(key);
+
+		if (value != std::nullopt) {
+			const uint8_t *source = value.value().data();
+			auto nextId = get64bit(&source);
+			safs::log_info("Loaded next chunk id: {}", nextId);
+			chunk_set_next_chunk_id(nextId);
+		} else {
+			safs::log_info("No next chunk id found, starting from 1");
+			chunk_set_next_chunk_id(1);
+		}
+	}
+
 	safs::log_info("Loading chunks");
 
 	auto transaction = kvEngine_->createReadWriteTransaction();
@@ -488,8 +507,8 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 
 			if (chunkId > 0) {
 				chunk_add_from_initial_metadata_load(chunkId, chunkVersion, lockedTo, lockId);
-				safs::log_info("Loaded chunk: {} -> {} (lockedto: {}, lockid: {})", chunkId,
-				               chunkVersion, lockedTo, lockId);
+				// safs::log_info("Loaded chunk: {} -> {} (lockedto: {}, lockid: {})", chunkId,
+				//                chunkVersion, lockedTo, lockId);
 				chunkCount++;
 			}
 		}
@@ -505,6 +524,24 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 	safs::log_info("Loaded {} chunks", chunkCount);
 
 	// Connect the signal handlers after initial loading
+
+	nextChunkIdProperty().connect([this](uint64_t /*oldNextChunkId*/, uint64_t newNextChunkId) {
+		auto transaction = kvEngine_->createReadWriteTransaction();
+
+		// Key
+		kv::Key key = kv::toU8Vector("META_NEXT_CHUNK_ID");
+
+		// Value
+		kv::Value value(sizeof(newNextChunkId));
+		uint8_t *ptr = value.data();
+		put64bit(&ptr, newNextChunkId);
+
+		transaction->set(key, value);
+
+		if (!transaction->commit()) {
+			safs::log_err("Failed to store next chunk id: {}", newNextChunkId);
+		}
+	});
 
 	gChunkChangedSignal.connect(
 	    [this](uint64_t chunkid, uint32_t version, uint32_t lockedto, uint32_t lockid) {
@@ -596,10 +633,11 @@ FSNode *MetadataBackendFDB::getRootDirFromDB() {
 	return nullptr;
 }
 
-void fs_new(void) {
-	gMetadata->maxInodeId().setValue(SPECIAL_INODE_ROOT);
-	gMetadata->metadataVersion = 1;
-	gMetadata->nextSessionId().setValue(1);
+void MetadataBackendFDB::fs_new() {
+	gMetadata->maxInodeId().setValue(
+	    getPropertyValue<inode_t>("META_MAX_INODE_ID", SPECIAL_INODE_ROOT));
+	gMetadata->metadataVersion = getPropertyValue<uint64_t>("META_VERSION", 1);
+	gMetadata->nextSessionId().setValue(getPropertyValue<uint32_t>("META_NEXT_SESSION", 1));
 
 	// Check if the root directory is already in the database
 
@@ -660,19 +698,24 @@ void MetadataBackendFDB::init() {
 
 		auto transaction = kvEngine_->createReadWriteTransaction();
 
-		constexpr uint64_t kInitialVersion = 1ULL;
-		kv::Value versionValue;
-		serialize(versionValue, kInitialVersion);
+		constexpr uint64_t kInitialValue64Bits = 1ULL;
+		kv::Value initialValue64Bits;
+		serialize(initialValue64Bits, kInitialValue64Bits);
 
-		transaction->set(kv::toU8Vector("META_VERSION"), versionValue);
+		constexpr uint32_t initialValue32Bits = 1U;
+		kv::Value initialValue32BitsValue;
+		serialize(initialValue32BitsValue, initialValue32Bits);
+
 		transaction->set(kv::toU8Vector("META_FORMAT"), kv::toU8Vector("1.0"));
+		transaction->set(kv::toU8Vector("META_VERSION"), initialValue64Bits);
+		transaction->set(kv::toU8Vector("META_MAX_INODE_ID"), initialValue64Bits);
+		transaction->set(kv::toU8Vector("META_NEXT_SESSION"), initialValue32BitsValue);
 
 		if (!transaction->commit()) {
 			const auto *message = "Failed to initialize new metadata";
 			safs::log_err(message);
 			throw MetadataConsistencyException(message);
 		}
-
 	}
 
 	gMetadata = new FilesystemMetadata;
@@ -724,9 +767,7 @@ bool MetadataBackendFDB::initFoundationDB(const std::string &clusterFile) {
 }
 
 void MetadataBackendFDB::createConnections() {
-	gMetadata->nextSessionId().connect([this](uint32_t oldSessionId, uint32_t newSessionId) {
-		(void)oldSessionId;  // Unused parameter
-
+	gMetadata->nextSessionId().connect([this](uint32_t /*oldSessionId*/, uint32_t newSessionId) {
 		auto transaction = kvEngine_->createReadWriteTransaction();
 		kv::Key sessionKey{kv::toU8Vector(gMetadata->nextSessionId().getName())};
 		kv::Value sessionValue;
@@ -738,9 +779,7 @@ void MetadataBackendFDB::createConnections() {
 		}
 	});
 
-	gMetadata->maxInodeId().connect([this](inode_t oldMaxInodeId, inode_t newMaxInodeId) {
-		(void)oldMaxInodeId;  // Unused parameter
-
+	gMetadata->maxInodeId().connect([this](inode_t /*oldMaxInodeId*/, inode_t newMaxInodeId) {
 		auto transaction = kvEngine_->createReadWriteTransaction();
 		kv::Key maxInodeKey{kv::toU8Vector(gMetadata->maxInodeId().getName())};
 		kv::Value maxInodeValue;

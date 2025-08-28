@@ -115,6 +115,21 @@ private:
 
 	int8_t loadChunks(bool ignoreFlag);
 
+	void fs_new();
+
+	template <typename T>
+	T getPropertyValue(const std::string &propertyName, T defaultValue) {
+		auto transaction = kvEngine_->createReadWriteTransaction();
+		auto value = transaction->get(kv::toU8Vector(propertyName));
+
+		if (value.has_value()) {
+			const uint8_t *data = value.value().data();
+			return get64bit(&data);
+		}
+
+		return defaultValue;
+	}
+
 #if !defined(METARESTORE) && !defined(METALOGGER)
 	std::unique_ptr<IMetadataDumper> dumper_;
 #endif  // #ifndef METARESTORE
