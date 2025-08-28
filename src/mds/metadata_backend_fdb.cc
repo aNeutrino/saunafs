@@ -196,8 +196,6 @@ int8_t MetadataBackendFDB::loadNode(FSNode *node) {
 		return kOpFailure;
 	}
 
-	safs::log_info("Add node: {}", node->id);
-
 	gMetadata->addNode(node, true);
 	gMetadata->inodePool.markAsAcquired(node->id);
 	gMetadata->nodes++;
@@ -234,16 +232,12 @@ int8_t MetadataBackendFDB::loadEdges(bool ignoreFlag) {
 			source = pair.value.data();
 			edgeName = std::string(reinterpret_cast<const char *>(source), pair.value.size());
 
-			// Process the edge
-			safs::log_info("Inserting edge: {} -> {} : {}", parentId, childId, edgeName);
 			status = loadEdge(parentId, childId, edgeName, ignoreFlag, false);
 
 			if (status < 0) {
 				safs::log_err("Error loading edge: {} -> {} : {}", parentId, childId, edgeName);
 				return kOpFailure;
 			}
-
-			safs::log_info("Edge parsed {} -> {} : {}", parentId, childId, edgeName);
 		}
 
 		if (!pageResult.hasMore() || pageResult.getPairs().empty()) { break; }
@@ -509,8 +503,6 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 
 	gChunkChangedSignal.connect(
 	    [this](uint64_t chunkid, uint32_t version, uint32_t lockedto, uint32_t lockid) {
-			safs::log_info("Chunk changed signal: {} -> {} (lockedto: {}, lockid: {})",
-			              chunkid, version, lockedto, lockid);
 		    auto transaction = kvEngine_->createReadWriteTransaction();
 
 		    // Key
