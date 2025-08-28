@@ -531,7 +531,6 @@ struct ChunksMetadata {
 	Chunk *lastchunkptr;
 
 	// other chunks metadata information
-	uint64_t nextchunkid; /// serial id of the next chunk to be created
 	uint64_t chunksChecksum;
 	uint64_t chunksChecksumRecalculated;
 	uint32_t checksumRecalculationPosition;
@@ -542,7 +541,6 @@ struct ChunksMetadata {
 			chunkhash{},
 			lastchunkid{},
 			lastchunkptr{},
-			nextchunkid{1},
 			chunksChecksum{},
 			chunksChecksumRecalculated{},
 			checksumRecalculationPosition{0} {
@@ -555,6 +553,12 @@ struct ChunksMetadata {
 			delete cb;
 		}
 	}
+
+	ObservableIntegralProperty<uint64_t> &nextChunkId() { return nextChunkId_; }
+
+private:
+	/// serial id of the next chunk to be created
+	ObservableIntegralProperty<uint64_t> nextChunkId_{"META_NEXT_CHUNK_ID", 1};
 };
 } // anonymous namespace
 
@@ -734,7 +738,7 @@ static inline void emit_chunk_changed(const Chunk *c) {
 
 uint64_t chunk_checksum(ChecksumMode mode) {
 	uint64_t checksum = 46586918175221;
-	addToChecksum(checksum, gChunksMetadata->nextchunkid);
+	addToChecksum(checksum, gChunksMetadata->nextChunkId().getValue());
 	if (mode == ChecksumMode::kForceRecalculate) {
 		chunk_recalculate_checksum();
 	}
@@ -1092,7 +1096,8 @@ uint8_t chunk_multi_modify(uint64_t ochunkid, uint32_t *lockid, uint8_t goal,
 		if (!calculator.isSafeEnoughToWrite(gRedundancyLevel)) {
 			return SAUNAFS_ERROR_NOCHUNKSERVERS;
 		}
-		c = chunk_new(gChunksMetadata->nextchunkid++, 1);
+		c = chunk_new(gChunksMetadata->nextChunkId().getValue(), 1);
+		gChunksMetadata->nextChunkId().increment();
 		c->interrupted = 0;
 		c->operation = Chunk::CREATE;
 		chunk_add_file_int(c,goal);
@@ -1168,7 +1173,8 @@ uint8_t chunk_multi_modify(uint64_t ochunkid, uint32_t *lockid, uint8_t goal,
 				return SAUNAFS_ERROR_QUOTA;
 			}
 			assert(oc->isWritable());
-			c = chunk_new(gChunksMetadata->nextchunkid++, 1);
+			c = chunk_new(gChunksMetadata->nextChunkId().getValue(), 1);
+			gChunksMetadata->nextChunkId().increment();
 			c->interrupted = 0;
 			c->operation = Chunk::DUPLICATE;
 			chunk_delete_file_int(oc,goal);
@@ -1255,7 +1261,8 @@ uint8_t chunk_multi_truncate(uint64_t ochunkid, uint32_t lockid, uint32_t length
 		}
 
 		assert(oc->isWritable());
-		c = chunk_new(gChunksMetadata->nextchunkid++, 1);
+		c = chunk_new(gChunksMetadata->nextChunkId().getValue(), 1);
+		gChunksMetadata->nextChunkId().increment();
 		c->interrupted = 0;
 		c->operation = Chunk::DUPTRUNC;
 		chunk_delete_file_int(oc,goal);
@@ -1284,7 +1291,8 @@ uint8_t chunk_apply_modification(uint32_t ts, uint64_t oldChunkId, uint32_t lock
 		bool doIncreaseVersion, uint64_t *newChunkId) {
 	Chunk *c;
 	if (oldChunkId == 0) { // new chunk
-		c = chunk_new(gChunksMetadata->nextchunkid++, 1);
+		c = chunk_new(gChunksMetadata->nextChunkId().getValue(), 1);
+		gChunksMetadata->nextChunkId().increment();
 		chunk_add_file_int(c, goal);
 	} else {
 		Chunk *oc = chunk_find(oldChunkId);
@@ -1302,7 +1310,8 @@ uint8_t chunk_apply_modification(uint32_t ts, uint64_t oldChunkId, uint32_t lock
 				c->version++;
 			}
 		} else {
-			c = chunk_new(gChunksMetadata->nextchunkid++, 1);
+			c = chunk_new(gChunksMetadata->nextChunkId().getValue(), 1);
+			gChunksMetadata->nextChunkId().increment();
 			chunk_delete_file_int(oc, goal);
 			chunk_add_file_int(c, goal);
 		}
@@ -1415,13 +1424,13 @@ int chunk_increase_version(uint64_t chunkid) {
 }
 
 uint8_t chunk_set_next_chunkid(uint64_t nextChunkIdToBeSet) {
-	if (nextChunkIdToBeSet >= gChunksMetadata->nextchunkid) {
-		gChunksMetadata->nextchunkid = nextChunkIdToBeSet;
+	if (nextChunkIdToBeSet >= gChunksMetadata->nextChunkId().getValue()) {
+		gChunksMetadata->nextChunkId().setValue(nextChunkIdToBeSet);
 		return SAUNAFS_STATUS_OK;
 	} else {
 		safs_pretty_syslog(LOG_WARNING,"was asked to increase the next chunk id to %" PRIu64 ", but it was"
 				"already set to a bigger value %" PRIu64 ". Ignoring.",
-				nextChunkIdToBeSet, gChunksMetadata->nextchunkid);
+				nextChunkIdToBeSet, gChunksMetadata->nextChunkId().getValue());
 		return SAUNAFS_ERROR_MISMATCH;
 	}
 }
@@ -1546,7 +1555,7 @@ void chunk_server_has_chunk(matocsserventry *ptr, uint64_t chunkid, uint32_t ver
 	c = chunk_find(chunkid);
 	if (c==NULL) {
 		// chunkserver has nonexistent chunk, so create it for future deletion
-		if (chunkid>=gChunksMetadata->nextchunkid) {
+		if (chunkid >= gChunksMetadata->nextChunkId().getValue()) {
 			fs_set_nextchunkid(FsContext::getForMaster(eventloop_time()), chunkid + 1);
 		}
 		c = chunk_new(chunkid, new_version);
@@ -1607,8 +1616,8 @@ void chunk_damaged(matocsserventry *ptr, uint64_t chunkid, ChunkPartType chunk_t
 	c = chunk_find(chunkid);
 	if (c == NULL) {
 		// syslog(LOG_WARNING,"chunkserver has nonexistent chunk (%016" PRIX64 "), so create it for future deletion",chunkid);
-		if (chunkid >= gChunksMetadata->nextchunkid) {
-			gChunksMetadata->nextchunkid = chunkid + 1;
+		if (chunkid >= gChunksMetadata->nextChunkId().getValue()) {
+			gChunksMetadata->nextChunkId().setValue(chunkid + 1);
 		}
 		c = chunk_new(chunkid, 0);
 	}
@@ -2721,6 +2730,15 @@ void chunk_dump(void) {
 
 #endif
 
+ObservableIntegralProperty<uint64_t> &nextChunkIdProperty() {
+	return gChunksMetadata->nextChunkId();
+}
+
+void chunk_set_next_chunk_id(uint64_t nextChunkIdToBeSet) {
+	passert(gChunksMetadata);
+	gChunksMetadata->nextChunkId().setValue(nextChunkIdToBeSet);
+}
+
 void chunk_add_from_initial_metadata_load(uint64_t chunkId, uint32_t chunkVersion,
                                           uint32_t lockedTo, uint32_t lockId) {
 	Chunk *chunk = chunk_new(chunkId, chunkVersion);
@@ -2730,7 +2748,7 @@ void chunk_add_from_initial_metadata_load(uint64_t chunkId, uint32_t chunkVersio
 
 bool chunksLoadFromFile(MetadataLoader::Options options) {
 	const uint8_t *ptr = options.metadataFile->seek(options.offset);
-	gChunksMetadata->nextchunkid = get64bit(&ptr);
+	gChunksMetadata->nextChunkId().setValue(get64bit(&ptr));
 	options.offset = options.metadataFile->offset(ptr);
 
 	while (true) {
@@ -2766,7 +2784,7 @@ void chunk_store(FILE *fd) {
 	uint32_t version;
 	uint32_t lockedto, lockid;
 	ptr = hdr;
-	put64bit(&ptr,gChunksMetadata->nextchunkid);
+	put64bit(&ptr, gChunksMetadata->nextChunkId().getValue());
 	if (fwrite(hdr,1,8,fd)!=(size_t)8) {
 		return;
 	}
@@ -2813,7 +2831,7 @@ void chunk_newfs(void) {
 #ifndef METARESTORE
 	Chunk::count = 0;
 #endif
-	gChunksMetadata->nextchunkid = 1;
+	gChunksMetadata->nextChunkId().setValue(1);
 }
 
 #ifndef METARESTORE
