@@ -24,6 +24,7 @@
 #include <sys/mman.h>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -394,7 +395,7 @@ int8_t MetadataBackendFDB::loadFree(bool ignoreFlag) {
 			source = pair.value.data();
 			get32bit(&source, timeStamp);
 
-			safs::log_info("Inserting FREE: {} -> {}", inode, timeStamp);
+			// safs::log_info("Inserting FREE: {} -> {}", inode, timeStamp);
 			gMetadata->inodePool.detain(inode, timeStamp, true);
 		}
 
@@ -405,51 +406,51 @@ int8_t MetadataBackendFDB::loadFree(bool ignoreFlag) {
 	}
 
 	// Connect the signal handlers after initial loading
-
-	gMetadata->inodePool.detainedAddedSignal.connect([this](inode_t id, uint32_t ts) {
-		safs::log_info("Detained added signal: {} -> {}", id, ts);
-		auto transaction = kvEngine_->createReadWriteTransaction();
-
-		// Key
-		static constexpr std::array<uint8_t, 5> freePrefix = {'F', 'R', 'E', 'E', '_'};
-		static constexpr size_t kFreeKeySize = freePrefix.size() + sizeof(inode_t);
-		static kv::Key key(kFreeKeySize);
-		std::memcpy(key.data(), freePrefix.data(), freePrefix.size());
-		uint8_t *ptr = key.data() + freePrefix.size();
-		putINode(&ptr, id);
-
-		kv::Value value(sizeof(ts));
-		ptr = value.data();
-		put32bit(&ptr, ts);
-
-		// Value
-		transaction->set(key, value);
-
-		if (!transaction->commit()) {
-			safs::log_err("Failed to store free node: {} -> {}", id, ts);
-		}
-	});
-
-	gMetadata->inodePool.detainedRemovedSignal.connect([this](inode_t id) {
-		safs::log_info("Detained removed signal: {}", id);
-		auto transaction = kvEngine_->createReadWriteTransaction();
-
-		// Key
-		static constexpr std::array<uint8_t, 5> freePrefix = {'F', 'R', 'E', 'E', '_'};
-		static constexpr size_t kFreeKeySize = freePrefix.size() + sizeof(inode_t);
-		static kv::Key key(kFreeKeySize);
-		std::memcpy(key.data(), freePrefix.data(), freePrefix.size());
-		uint8_t *ptr = key.data() + freePrefix.size();
-		putINode(&ptr, id);
-
-		transaction->remove(key);
-
-		if (!transaction->commit()) {
-			safs::log_err("Failed to remove free node: {}", id);
-		}
-	});
+	gMetadata->inodePool.detainedAddedSignal.connect(this, &MetadataBackendFDB::onDetainedAdded);
+	gMetadata->inodePool.detainedRemovedSignal.connect(this, &MetadataBackendFDB::onDetainedRemoved);
 
 	return kOpSuccess;
+}
+
+void MetadataBackendFDB::onDetainedAdded(inode_t inodeId, uint32_t timestamp) {
+	safs::log_info("Detained added signal: {} -> {}", inodeId, timestamp);
+	auto transaction = kvEngine_->createReadWriteTransaction();
+
+	// Key
+	static constexpr std::array<uint8_t, 5> freePrefix = {'F', 'R', 'E', 'E', '_'};
+	static constexpr size_t kFreeKeySize = freePrefix.size() + sizeof(inode_t);
+	static kv::Key key(kFreeKeySize);
+	std::memcpy(key.data(), freePrefix.data(), freePrefix.size());
+	uint8_t *ptr = key.data() + freePrefix.size();
+	putINode(&ptr, inodeId);
+
+	kv::Value value(sizeof(timestamp));
+	ptr = value.data();
+	put32bit(&ptr, timestamp);
+
+	// Value
+	transaction->set(key, value);
+
+	if (!transaction->commit()) {
+		safs::log_err("Failed to store free node: {} -> {}", inodeId, timestamp);
+	}
+}
+
+void MetadataBackendFDB::onDetainedRemoved(inode_t inodeId) {
+	safs::log_info("Detained removed signal: {}", inodeId);
+	auto transaction = kvEngine_->createReadWriteTransaction();
+
+	// Key
+	static constexpr std::array<uint8_t, 5> freePrefix = {'F', 'R', 'E', 'E', '_'};
+	static constexpr size_t kFreeKeySize = freePrefix.size() + sizeof(inode_t);
+	static kv::Key key(kFreeKeySize);
+	std::memcpy(key.data(), freePrefix.data(), freePrefix.size());
+	uint8_t *ptr = key.data() + freePrefix.size();
+	putINode(&ptr, inodeId);
+
+	transaction->remove(key);
+
+	if (!transaction->commit()) { safs::log_err("Failed to remove free node: {}", inodeId); }
 }
 
 int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
@@ -767,129 +768,117 @@ bool MetadataBackendFDB::initFoundationDB(const std::string &clusterFile) {
 }
 
 void MetadataBackendFDB::createConnections() {
-	gMetadata->nextSessionId().connect([this](uint32_t /*oldSessionId*/, uint32_t newSessionId) {
-		auto transaction = kvEngine_->createReadWriteTransaction();
-		kv::Key sessionKey{kv::toU8Vector(gMetadata->nextSessionId().getName())};
-		kv::Value sessionValue;
-		serialize(sessionValue, newSessionId);
-		transaction->set(sessionKey, sessionValue);
+	gMetadata->nextSessionId().connect(this, &MetadataBackendFDB::onNextSessionIdChanged);
 
-		if (!transaction->commit()) {
-			safs::log_err("Failed to store session ID: {}", newSessionId);
-		}
-	});
+	gMetadata->maxInodeId().connect(this, &MetadataBackendFDB::onMaxInodeIdChanged);
 
-	gMetadata->maxInodeId().connect([this](inode_t /*oldMaxInodeId*/, inode_t newMaxInodeId) {
-		auto transaction = kvEngine_->createReadWriteTransaction();
-		kv::Key maxInodeKey{kv::toU8Vector(gMetadata->maxInodeId().getName())};
-		kv::Value maxInodeValue;
-		serialize(maxInodeValue, newMaxInodeId);
-		transaction->set(maxInodeKey, maxInodeValue);
+	getChangelogSignal().connect(this, &MetadataBackendFDB::onChangelogEvent);
 
-		if (!transaction->commit()) {
-			safs::log_err("Failed to store max inode ID: {}", newMaxInodeId);
-		}
-	});
+	gMetadata->nodeChangedSignal.connect(this, &MetadataBackendFDB::onNodeChanged);
 
-	getChangelogSignal().connect([this](const ChangelogEvent &event) {
-		// static constexpr uint8_t kLogPrefixSize = 4;
-		// static kv::Key logKey{'L', 'O', 'G', '_', 'V', 'E', 'R', 'S', 'I', 'O', 'N', '_'};
-		// uint8_t *ptr = logKey.data() + kLogPrefixSize;
-		// put64bit(&ptr, event.version);
+	gMetadata->edgeChangedSignal.connect(this, &MetadataBackendFDB::onEdgeChanged);
 
-		// // The log itself
-		// auto transaction = kvEngine_->createReadWriteTransaction();
-		// transaction->set(logKey, kv::toU8Vector(event.entry));
+	gMetadata->edgeRemovedSignal.connect(this, &MetadataBackendFDB::onEdgeRemoved);
+}
 
-		// Then update the metadata version
-		static kv::Key versionKey{kv::toU8Vector("META_VERSION")};
-		kv::Value serializedVersion;
-		serialize(serializedVersion, event.version);
-		auto transaction = kvEngine_->createReadWriteTransaction();
-		transaction->set(versionKey, serializedVersion);
+void MetadataBackendFDB::onNextSessionIdChanged(uint32_t /*oldSessionId*/, uint32_t newSessionId) {
+	auto transaction = kvEngine_->createReadWriteTransaction();
+	kv::Key sessionKey{kv::toU8Vector(gMetadata->nextSessionId().getName())};
+	kv::Value sessionValue;
+	serialize(sessionValue, newSessionId);
+	transaction->set(sessionKey, sessionValue);
 
-		if (!transaction->commit()) {
-			safs::log_err("Failed to store changelog entry: {}", event.entry);
-			return;
-		}
+	if (!transaction->commit()) { safs::log_err("Failed to store session ID: {}", newSessionId); }
+}
 
-		// auto committedVersion = transaction->getCommittedVersion();
+void MetadataBackendFDB::onMaxInodeIdChanged(inode_t /*oldMaxInodeId*/, inode_t newMaxInodeId) {
+	auto transaction = kvEngine_->createReadWriteTransaction();
+	kv::Key maxInodeKey{kv::toU8Vector(gMetadata->maxInodeId().getName())};
+	kv::Value maxInodeValue;
+	serialize(maxInodeValue, newMaxInodeId);
+	transaction->set(maxInodeKey, maxInodeValue);
 
-		// if (committedVersion.has_value()) {
-		// 	safs::log_info("Commit: {}: {}|{}", committedVersion.value(), event.version,
-		// 	               event.entry);
-		// } else {
-		// 	safs::log_err("Changelog entry committed but version is not available");
-		// }
-	});
+	if (!transaction->commit()) {
+		safs::log_err("Failed to store max inode ID: {}", newMaxInodeId);
+	}
+}
 
-	gMetadata->nodeChangedSignal.connect([this](FSNode *node) {
-		auto transaction = kvEngine_->createReadWriteTransaction();
+void MetadataBackendFDB::onChangelogEvent(const ChangelogEvent &event) {
+	// Then update the metadata version
+	static kv::Key versionKey{kv::toU8Vector("META_VERSION")};
+	kv::Value serializedVersion;
+	serialize(serializedVersion, event.version);
+	auto transaction = kvEngine_->createReadWriteTransaction();
+	transaction->set(versionKey, serializedVersion);
 
-		// Key
-		static std::string nodePrefix = "NODE_";
-		kv::Key key(nodePrefix.length() + sizeof(node->id));
-		std::memcpy(key.data(), nodePrefix.data(), nodePrefix.length());
-		uint8_t *idPtr = key.data() + nodePrefix.length();
-		putINode(&idPtr, node->id);
+	if (!transaction->commit()) {
+		safs::log_err("Failed to store changelog entry: {}", event.entry);
+		return;
+	}
+}
 
-		// Value
-		kv::Value value;
-		value.resize(node->serializedSize());
-		uint8_t *ptr = value.data();
-		node->serialize(&ptr);
-		transaction->set(key, value);
+void MetadataBackendFDB::onNodeChanged(FSNode *node) {
+	auto transaction = kvEngine_->createReadWriteTransaction();
 
-		if (!transaction->commit()) {
-			safs::log_err("Failed to store node: {}", node->id);
-		}
-	});
+	// Key
+	static std::string nodePrefix = "NODE_";
+	kv::Key key(nodePrefix.length() + sizeof(node->id));
+	std::memcpy(key.data(), nodePrefix.data(), nodePrefix.length());
+	uint8_t *idPtr = key.data() + nodePrefix.length();
+	putINode(&idPtr, node->id);
 
-	gMetadata->edgeChangedSignal.connect(
-	    [this](FSNodeDirectory *parent, FSNode *child, hstorage::Handle *handlePtr) {
-		    auto transaction = kvEngine_->createReadWriteTransaction();
+	// Value
+	kv::Value value;
+	value.resize(node->serializedSize());
+	uint8_t *ptr = value.data();
+	node->serialize(&ptr);
+	transaction->set(key, value);
 
-		    // Key
-		    static constexpr std::array<uint8_t, 5> edgePrefix = {'E', 'D', 'G', 'E', '_'};
-		    static constexpr size_t kEdgeKeySize =
-		        edgePrefix.size() + sizeof(inode_t) + sizeof(inode_t);
-		    static kv::Key key(kEdgeKeySize);
-		    std::memcpy(key.data(), edgePrefix.data(), edgePrefix.size());
-		    uint8_t *ptr = key.data() + edgePrefix.size();
-		    putINode(&ptr, parent->id);
-		    putINode(&ptr, child->id);
+	if (!transaction->commit()) { safs::log_err("Failed to store node: {}", node->id); }
+}
 
-		    auto name = handlePtr->get();
-		    kv::Value value(name.length());
-		    std::memcpy(value.data(), name.data(), name.length());
+void MetadataBackendFDB::onEdgeChanged(FSNodeDirectory *parent, FSNode *child,
+                                       hstorage::Handle *handlePtr) {
+	auto transaction = kvEngine_->createReadWriteTransaction();
 
-		    // Value
-		    transaction->set(key, value);
+	// Key
+	static constexpr std::array<uint8_t, 5> edgePrefix = {'E', 'D', 'G', 'E', '_'};
+	static constexpr size_t kEdgeKeySize = edgePrefix.size() + sizeof(inode_t) + sizeof(inode_t);
+	static kv::Key key(kEdgeKeySize);
+	std::memcpy(key.data(), edgePrefix.data(), edgePrefix.size());
+	uint8_t *ptr = key.data() + edgePrefix.size();
+	putINode(&ptr, parent->id);
+	putINode(&ptr, child->id);
 
-		    if (!transaction->commit()) {
-			    safs::log_err("Failed to store edge: {} -> {} : {}", parent->id, child->id, name);
-		    }
-	    });
+	auto name = handlePtr->get();
+	kv::Value value(name.length());
+	std::memcpy(value.data(), name.data(), name.length());
 
-	gMetadata->edgeRemovedSignal.connect([this](inode_t parentId, inode_t childId) {
-		auto transaction = kvEngine_->createReadWriteTransaction();
+	// Value
+	transaction->set(key, value);
 
-		// Key
-		static constexpr std::array<uint8_t, 5> edgePrefix = {'E', 'D', 'G', 'E', '_'};
-		static constexpr size_t kEdgeKeySize =
-		    edgePrefix.size() + sizeof(inode_t) + sizeof(inode_t);
-		static kv::Key key(kEdgeKeySize);
-		std::memcpy(key.data(), edgePrefix.data(), edgePrefix.size());
-		uint8_t *ptr = key.data() + edgePrefix.size();
-		putINode(&ptr, parentId);
-		putINode(&ptr, childId);
+	if (!transaction->commit()) {
+		safs::log_err("Failed to store edge: {} -> {} : {}", parent->id, child->id, name);
+	}
+}
 
-		transaction->remove(key);
+void MetadataBackendFDB::onEdgeRemoved(inode_t parentId, inode_t childId) {
+	auto transaction = kvEngine_->createReadWriteTransaction();
 
-		if (!transaction->commit()) {
-			safs::log_err("Failed to remove edge: {} -> {}", parentId, childId);
-		}
-	});
+	// Key
+	static constexpr std::array<uint8_t, 5> edgePrefix = {'E', 'D', 'G', 'E', '_'};
+	static constexpr size_t kEdgeKeySize = edgePrefix.size() + sizeof(inode_t) + sizeof(inode_t);
+	static kv::Key key(kEdgeKeySize);
+	std::memcpy(key.data(), edgePrefix.data(), edgePrefix.size());
+	uint8_t *ptr = key.data() + edgePrefix.size();
+	putINode(&ptr, parentId);
+	putINode(&ptr, childId);
+
+	transaction->remove(key);
+
+	if (!transaction->commit()) {
+		safs::log_err("Failed to remove edge: {} -> {}", parentId, childId);
+	}
 }
 
 void MetadataBackendFDB::initRootKey() {
