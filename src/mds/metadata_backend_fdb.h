@@ -26,6 +26,10 @@
 #include "kv/ikv_engine.h"
 #include "master/metadata_backend_interface.h"
 
+// Forward declarations to avoid heavy includes in the header
+struct ChangelogEvent;
+namespace hstorage { class Handle; }
+
 /// Simplified Metadata Section structure for FoundationDB
 struct MetadataSectionFDB {
 	std::string name;    ///< Name of the section
@@ -129,6 +133,17 @@ private:
 
 		return defaultValue;
 	}
+
+	// slots: Signal handlers
+
+	void onDetainedAdded(inode_t inodeId, uint32_t timestamp);
+	void onDetainedRemoved(inode_t inodeId);
+	void onNextSessionIdChanged(uint32_t oldSessionId, uint32_t newSessionId);
+	void onMaxInodeIdChanged(inode_t oldMaxInodeId, inode_t newMaxInodeId);
+	void onChangelogEvent(const ChangelogEvent &event);
+	void onNodeChanged(FSNode *node);
+	void onEdgeChanged(FSNodeDirectory *parent, FSNode *child, hstorage::Handle *handlePtr);
+	void onEdgeRemoved(inode_t parentId, inode_t childId);
 
 #if !defined(METARESTORE) && !defined(METALOGGER)
 	std::unique_ptr<IMetadataDumper> dumper_;
