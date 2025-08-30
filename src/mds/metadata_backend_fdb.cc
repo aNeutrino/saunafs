@@ -32,6 +32,7 @@
 
 #include "common/datapack.h"
 #include "common/event_loop.h"
+#include "common/scoped_timer.h"
 #include "common/serialization.h"
 #include "common/special_inode_defs.h"
 #include "common/type_defs.h"
@@ -129,6 +130,8 @@ uint8_t MetadataBackendFDB::fs_storeall(DumpType dumpType) {
 
 int8_t MetadataBackendFDB::loadNodes(bool ignoreFlag) {
 	(void)ignoreFlag;  // Unused parameter
+	safs::log_info("Loading nodes...");
+	util::ScopedTimer timer("Nodes loaded");
 
 	auto transaction = kvEngine_->createReadWriteTransaction();
 	std::string endKey = "NODE_\\xff";
@@ -207,6 +210,9 @@ int8_t MetadataBackendFDB::loadNode(FSNode *node) {
 }
 
 int8_t MetadataBackendFDB::loadEdges(bool ignoreFlag) {
+	safs::log_info("Loading edges...");
+	util::ScopedTimer timer("Edges loaded");
+
 	auto transaction = kvEngine_->createReadWriteTransaction();
 	std::string iniKey = "EDGE_";
 	std::string endKey = "EDGE_\\xff";
@@ -371,7 +377,9 @@ int8_t MetadataBackendFDB::loadEdge(inode_t parentId, inode_t childId, const std
 }
 
 int8_t MetadataBackendFDB::loadFree(bool ignoreFlag) {
-	safs::log_info("Loading free nodes");
+	safs::log_info("Loading free nodes...");
+	util::ScopedTimer timer("Free nodes loaded");
+
 	(void)ignoreFlag;  // Unused parameter
 
 	auto transaction = kvEngine_->createReadWriteTransaction();
@@ -455,6 +463,9 @@ void MetadataBackendFDB::onDetainedRemoved(inode_t inodeId) {
 }
 
 int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
+	safs::log_info("Loading chunks...");
+	util::ScopedTimer timer("Chunks loaded");
+
 	(void)ignoreFlag;  // Unused parameter
 
 	{
@@ -475,8 +486,6 @@ int8_t MetadataBackendFDB::loadChunks(bool ignoreFlag) {
 			chunk_set_next_chunk_id(1);
 		}
 	}
-
-	safs::log_info("Loading chunks");
 
 	auto transaction = kvEngine_->createReadWriteTransaction();
 	std::string iniKey = "CHNK_";
