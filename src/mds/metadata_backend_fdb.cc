@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -635,6 +636,19 @@ FSNode *MetadataBackendFDB::getRootDirFromDB() {
 }
 
 void MetadataBackendFDB::fs_new() {
+	// Sharding parameters from the config file
+	gMetadata->minInodeId = cfg_getuint64("MIN_INODE_ID", SPECIAL_INODE_ROOT + 1);
+	// Optional shard size: when set, restrict this MDS to a finite inode range
+	const inode_t shardSize = cfg_getuint64("INODE_SHARD_SIZE", 0ULL);
+
+	if (shardSize > 0) {
+		gMetadata->inodeShardEnd = gMetadata->minInodeId + shardSize - 1;
+	} else {
+		gMetadata->inodeShardEnd = std::numeric_limits<inode_t>::max();
+	}
+
+	safs::log_info("Inode shard: [{} - {}]", gMetadata->minInodeId, gMetadata->inodeShardEnd);
+
 	gMetadata->maxInodeId().setValue(
 	    getPropertyValue<inode_t>("META_MAX_INODE_ID", SPECIAL_INODE_ROOT));
 	gMetadata->metadataVersion = getPropertyValue<uint64_t>("META_VERSION", 1);
@@ -770,9 +784,9 @@ bool MetadataBackendFDB::initFoundationDB(const std::string &clusterFile) {
 void MetadataBackendFDB::createConnections() {
 	gMetadata->nextSessionId().connect(this, &MetadataBackendFDB::onNextSessionIdChanged);
 
-	gMetadata->maxInodeId().connect(this, &MetadataBackendFDB::onMaxInodeIdChanged);
+	// gMetadata->maxInodeId().connect(this, &MetadataBackendFDB::onMaxInodeIdChanged);
 
-	getChangelogSignal().connect(this, &MetadataBackendFDB::onChangelogEvent);
+	// getChangelogSignal().connect(this, &MetadataBackendFDB::onChangelogEvent);
 
 	gMetadata->nodeChangedSignal.connect(this, &MetadataBackendFDB::onNodeChanged);
 
