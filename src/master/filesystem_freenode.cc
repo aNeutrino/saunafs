@@ -25,8 +25,22 @@
 #include "master/filesystem_metadata.h"
 
 inode_t fsnodes_get_next_id(uint32_t ts, inode_t req_inode) {
-	if(req_inode == 0 || !gMetadata->inodePool.markAsAcquired(req_inode,ts)) {
-		req_inode = gMetadata->inodePool.acquire(ts);
+	const inode_t shardBegin = gMetadata->inodeShardBegin();
+	const inode_t shardEnd = gMetadata->inodeShardLimit();
+
+	// If a specific inode is requested, accept only if it is within this shard and available
+	if (req_inode != 0) {
+		if (req_inode < shardBegin || req_inode > shardEnd ||
+		    !gMetadata->inodePool.markAsAcquired(req_inode, ts)) {
+			req_inode = 0;  // fall back to auto-allocate
+		}
+	}
+
+	if(req_inode == 0) {
+		req_inode = gMetadata->inodePool.acquire(ts) + gMetadata->minInodeId;
+		if (req_inode > shardEnd) {
+			mabort("Out of free inode numbers in this shard");
+		}
 	}
 	if (req_inode == 0) {
 		mabort("Out of free inode numbers");

@@ -23,6 +23,7 @@
 #include "common/platform.h"
 
 #include <cstdint>
+#include <limits>
 #include <map>
 
 #include "common/observable_property.h"
@@ -63,6 +64,14 @@ public:
 	TaskManager taskManager;
 	FileLocks flockLocks;
 	FileLocks posixLocks;
+
+	/// Minimum inode id this MDS can assign.
+	/// It is used to avoid inode id collisions when multiple MDSs are running.
+	inode_t minInodeId{SPECIAL_INODE_ROOT + 1};
+
+	/// Inclusive end of the shard this MDS is allowed to use.
+	/// If set to std::numeric_limits<inode_t>::max(), the shard is considered unbounded.
+	inode_t inodeShardEnd{std::numeric_limits<inode_t>::max()};
 
 	inode_t nodes{};
 	uint64_t metadataVersion{};
@@ -127,6 +136,10 @@ public:
 	static constexpr uint8_t kHeaderSize = sizeof(metadataVersion) +
 	                                       ObservableIntegralProperty<inode_t>::typeSize() +
 	                                       ObservableIntegralProperty<uint32_t>::typeSize();
+
+	// Inode shard helpers
+	inode_t inodeShardBegin() const { return minInodeId; }
+	inode_t inodeShardLimit() const { return inodeShardEnd; }
 
 	/// Adds the node to the hash and emits the signal if not from scan
 	void addNode(FSNode *node, bool isFromScan = false) {
