@@ -267,6 +267,13 @@ int8_t MetadataBackendFDB::loadEdge(inode_t parentId, inode_t childId, const std
 		return kOpSuccess;
 	}
 
+	// Guard: avoid creating self-loop edges (would cause infinite recursion in stats)
+	if (parentId == childId && parentId != 0) {
+		safs::log_err("loading edge: {}, {}->{} error: self-loop edge ignored",
+					  parentId, fsnodes_escape_name(name), childId);
+		return ignoreFlag ? kOpSuccess : kOpFailure;
+	}
+
 	FSNode *child = fsnodes_id_to_node(childId);
 
 	if (!child) {
@@ -338,6 +345,17 @@ int8_t MetadataBackendFDB::loadEdge(inode_t parentId, inode_t childId, const std
 			} else {
 				safs::log_err("use sfsmetarestore (option -i) to attach this node to root dir");
 				return kOpFailure;
+			}
+		}
+
+		// Guard: avoid creating directory cycles (parent becoming a descendant of child)
+		if (child->type == FSNodeType::kDirectory) {
+			auto *childDir = dynamic_cast<FSNodeDirectory *>(child);
+			if (childDir != nullptr && fsnodes_isancestor(childDir, parent)) {
+				safs::log_err(
+				    "loading edge: {}, {}->{} error: cycle detected (parent is descendant of child)",
+				    parentId, fsnodes_escape_name(name), childId);
+				return ignoreFlag ? kOpSuccess : kOpFailure;
 			}
 		}
 
@@ -651,7 +669,15 @@ void MetadataBackendFDB::fs_new() {
 	const inode_t shardSize = cfg_getuint64("INODE_SHARD_SIZE", 0ULL);
 
 	if (shardSize > 0) {
-		gMetadata->inodeShardEnd = gMetadata->minInodeId + shardSize - 1;
+		// Basic overflow-safe calculation
+		const auto begin = gMetadata->minInodeId;
+		const auto maxVal = std::numeric_limits<inode_t>::max();
+		if (shardSize - 1 > maxVal - begin) {
+			safs::log_err("Configured shard end overflows inode_t; capping to max");
+			gMetadata->inodeShardEnd = maxVal;
+		} else {
+			gMetadata->inodeShardEnd = begin + shardSize - 1;
+		}
 	} else {
 		gMetadata->inodeShardEnd = std::numeric_limits<inode_t>::max();
 	}

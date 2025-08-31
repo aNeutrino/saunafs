@@ -401,6 +401,12 @@ public:
 		return acquire();
 	}
 
+	// Acquire next available id that is >= min_id, after releasing detained by timestamp
+	IdType acquireAtLeast(const TimeType &ts, const IdType &min_id) {
+		releaseDetained(ts, release_count_);
+		return base::acquireAtLeast(min_id);
+	}
+
 	/*! \brief Returns the given ID (obtained via \p acquire) to the pool.
 	 *
 	 * \param id         Id to release.
