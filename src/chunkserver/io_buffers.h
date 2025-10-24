@@ -467,12 +467,25 @@ public:
 
 	/// @brief Returns whether the buffer is currently being updated (reading from socket).
 	bool isBeingUpdated() const;
+	bool isReadyForFlushing() const { return isReadyForFlushing_; }
+	void setReadyForFlushing(bool ready) { isReadyForFlushing_ = ready; }
+	uint32_t getFirstWriteId() const {
+		if (writeInfo_.empty()) { return 0; }
+		return writeInfo_.front().writeId;
+	}
+
+	uint32_t getCurrentAmountOps() const {
+		return writeInfo_.size();
+	}
+
+	bool isReplied = false;  ///< Whether the reply to the client was sent.
 
 protected:
 	const size_t headerSize_;  ///< The size of the header.
 	const size_t numBlocks_;   ///< The number of blocks.
 
 	bool isBeingUpdated_{false};
+	std::atomic<bool> isReadyForFlushing_{false};
 
 	/// The buffer for the block data.
 	Buffer<std::vector<uint8_t, AlignedAllocator<uint8_t, disk::kIoBlockSize>>> blockBuffer_;

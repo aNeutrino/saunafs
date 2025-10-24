@@ -220,7 +220,13 @@ void NetworkWorkerThread::servePoll() {
 			if (entry.pDescPos >= 0 &&
 			    (pdesc[entry.pDescPos].revents & POLLIN)) {
 				entry.lastActivity = now;
-				eptr->readFromSocket();
+				// int timesRead = 1;
+				bool shouldContinueReading = eptr->readFromSocket();
+				while (shouldContinueReading) {
+					shouldContinueReading = eptr->readFromSocket(false);
+					// timesRead++;
+				}
+				// safs::log_warn("DAVE: readFromSocket read {} times", timesRead);
 			}
 			if (entry.pDescPos >= 0 &&
 			    (pdesc[entry.pDescPos].revents & POLLOUT) &&

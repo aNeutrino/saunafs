@@ -66,6 +66,7 @@ public:
 	void addInitPacket();
 	void addDataPacket(uint32_t writeId,
 			uint16_t block, uint32_t offset, uint32_t size, const uint8_t* data);
+	void addFlushPacket();
 	void addEndPacket();
 	void sendData();
 	std::vector<Status> receiveData();
@@ -116,6 +117,7 @@ private:
 	std::list<Packet> pendingPackets_;
 	MultiBufferWriter bufferWriter_;
 	MessageReceiveBuffer receiveBuffer_;
+	uint32_t writeDataPacketsSinceLastFlush;
 
 	/// Number of WRITE_STATUS messages that are expected to be received from the chunkserver
 	uint32_t unconfirmedPackets_;

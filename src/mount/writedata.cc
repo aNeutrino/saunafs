@@ -1202,6 +1202,8 @@ struct ChunkData {
 		 * is the last one, ie. dataChain.size() == 1.
 		 */
 		if (workerWaitingForData && dataChain.size() == 1 && isDataChainPipeValid()) {
+			// safs::log_warn("DAVE: waking up worker for inode {}, chunk {}", parent_->inode,
+			//                chunkIndex);
 			if (write(newDataInChainPipe[1], " ", 1) != 1) {
 				safs::log_err("write pipe error: {}", strerr(errno));
 			}
@@ -1589,9 +1591,13 @@ void ChunkJobWriter::processJob(ChunkData *chunkData) {
 			// Don't do this if we just have to release some previously unlocked lock.
 			if (haveAnyBlockInCurrentChunk(inodeLock)) {
 				inodeLock.unlock();
+				// safs::log_warn("DAVE: writing chunk {} of inode {}", locator->locationInfo().chunkId,
+				//                parent->inode);
 				writer.init(locator.get(), gChunkserverTimeout_ms);
 				processDataChain(writer);
 				writer.finish(kTimeToFinishOperations * 1000);
+				// safs::log_warn("DAVE: writing chunk {} of inode {}", locator->locationInfo().chunkId,
+				//                parent->inode);
 
 				inodeLock.lock();
 				returnJournalToDataChain(writer.releaseJournal(), inodeLock);
@@ -1684,6 +1690,8 @@ void ChunkJobWriter::processDataChain(ChunkWriter &writer) {
 	bool otherJobsAreWaiting = false;
 	inodedata *parent = chunkData_->getParent();
 	while (true) {
+		// safs::log_warn("DAVE: processDataChain loop for inode {}, chunk {}, current fcb {}",
+		//                parent->inode, chunkIndex_, freecacheblocks.load());
 		bool newOtherJobsAreWaiting = !jobsQueue->isEmpty();
 		if (!otherJobsAreWaiting && newOtherJobsAreWaiting) {
 			// Some new jobs have just arrived in the queue -- we should finish faster.
@@ -1717,6 +1725,8 @@ void ChunkJobWriter::processDataChain(ChunkWriter &writer) {
 			}
 			if (chunkData_->requiresFlushing() && !haveAnyBlockInCurrentChunk(inodeLock)) {
 				// No more data and some flushing is needed or required, so flush everything
+				// safs::log_warn("DAVE: calling startFlushMode for inode {}, chunk {}, current fcb {}",
+				//                parent->inode, chunkIndex_, freecacheblocks.load());
 				writer.startFlushMode();
 			}
 			if (writer.getUnfinishedOperationsCount() < gWriteWindowSize) {
@@ -1735,6 +1745,8 @@ void ChunkJobWriter::processDataChain(ChunkWriter &writer) {
 				writer.dropNewOperations();
 			} else {
 				// Somebody if waiting for a flush, so we have to finish writing everything.
+				// safs::log_warn("DAVE: calling startFlushMode for inode {}, chunk {}, current fcb {}",
+				//                parent->inode, chunkIndex_, freecacheblocks.load());
 				writer.startFlushMode();
 			}
 			can_expect_next_block =
@@ -1760,6 +1772,8 @@ void ChunkJobWriter::processDataChain(ChunkWriter &writer) {
 		}
 
 		writer.processOperations(gWriteWaveTimeout);
+		// safs::log_warn("DAVE: after processOperations for inode {}, chunk {}, current fcb {}",
+		//                parent->inode, chunkIndex_, freecacheblocks.load());
 	}
 }
 
@@ -1897,6 +1911,8 @@ int write_block(ChunkData *chunkData, uint16_t pos, uint32_t from, uint32_t to, 
 	write_cb_acquire_blocks(1);
 
 	inodeLock.lock();
+	// safs::log_warn("DAVE: created new block, inode {}, chunk {}, block {}, from {}, to {}",
+	//                parent->inode, chunkData->chunkIndex, pos, from, to);
 	chunkData->pushToChain(
 	    WriteCacheBlock(chunkData->chunkIndex, pos, WriteCacheBlock::kWritableBlock));
 	sassert(chunkData->dataChain.back().expand(from, to, data));

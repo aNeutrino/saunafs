@@ -254,7 +254,7 @@ struct ChunkserverEntry {
 	/// @param isRead Indicates if the operation is a read (true) or write (false).
 	/// @return True if the operation was successful, false otherwise.
 	bool processRWBytes(int bytesRW, PacketStruct &packet, bool shouldForwardError,
-	                    const char *callerName, bool isRead);
+	                    const char *callerName, bool isRead, bool isDataExpected = true);
 
 	/// Reads the packet header from the socket.
 	/// @param socket The socket to read from.
@@ -262,7 +262,8 @@ struct ChunkserverEntry {
 	/// @param headerBuf The buffer to store the header.
 	/// @param targetMode The mode to set after reading the header.
 	/// @return True if the header was read successfully, false otherwise.
-	bool readHeader(int socket, PacketStruct &packet, uint8_t *headerBuf, Mode &targetMode);
+	bool readHeader(int socket, PacketStruct &packet, uint8_t *headerBuf, Mode &targetMode,
+	                bool isDataExpected = true);
 
 	/// Reads data from the socket into the packet structure.
 	/// @param socket The socket to read from.
@@ -448,6 +449,8 @@ struct ChunkserverEntry {
 	void writeData(const uint8_t *data, PacketHeader::Type type,
 	               PacketHeader::Length length);
 
+	void writeFlush(const uint8_t *data, uint32_t length);
+	bool lastOperationWasFlush = false;
 	/// Finalizes a write operation and closes the chunk and connection.
 	void writeEnd(const uint8_t *data, uint32_t length);
 
@@ -461,7 +464,7 @@ struct ChunkserverEntry {
 	void writeToSocket();
 
 	/// Reads data from the socket into the input buffer.
-	void readFromSocket();
+	bool readFromSocket(bool isDataExpected = true);
 	/// Checks if it is a read operation and tries to finish it.
 	void outputCheckReadFinished();
 

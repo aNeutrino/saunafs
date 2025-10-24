@@ -31,6 +31,7 @@
 #include "devtools/request_log.h"
 #include "protocol/cltocs.h"
 #include "protocol/cstocl.h"
+#include "slogger/slogger.h"
 
 const uint32_t kReceiveBufferSize = 1024;
 
@@ -46,6 +47,7 @@ WriteExecutor::WriteExecutor(ChunkserverStats& chunkserverStats,
 		  chunkserver_version_(chunkserver_version),
 		  chainHeadFd_(headFd),
 		  receiveBuffer_(kReceiveBufferSize),
+		  writeDataPacketsSinceLastFlush(0),
 		  unconfirmedPackets_(0),
 		  responseTimeout_(std::chrono::milliseconds(responseTimeout_ms)) {
 	chunkserverStats_.registerWriteOperation(chainHead_);
@@ -97,7 +99,28 @@ void WriteExecutor::addDataPacket(uint32_t writeId,
 	packet.data = data;
 	packet.dataSize = size;
 
+	writeDataPacketsSinceLastFlush++;
+	if (writeDataPacketsSinceLastFlush >= 8) {
+		addFlushPacket();
+	}
+
 	increaseUnconfirmedPacketCount();
+}
+
+void WriteExecutor::addFlushPacket() {
+	sassert(isRunning_);
+	if (writeDataPacketsSinceLastFlush == 0) {
+		// No need to flush if we haven't sent any data packets since last flush
+		return;
+	}
+
+	// safs::log_warn(
+	//     "DAVE: sending flush packet to chunkserver {}, current writeDataPacketsSinceLastFlush {}",
+	//     server().toString(), writeDataPacketsSinceLastFlush);
+	pendingPackets_.push_back(Packet());
+	Packet& packet = pendingPackets_.back();
+	cltocs::writeFlush::serialize(packet.buffer, chunkId_);
+	writeDataPacketsSinceLastFlush = 0;
 }
 
 void WriteExecutor::addEndPacket() {
@@ -109,27 +132,30 @@ void WriteExecutor::addEndPacket() {
 
 void WriteExecutor::sendData() {
 	LOG_AVG_TILL_END_OF_SCOPE0("WriteExecutor::sendData");
-	if (!bufferWriter_.hasDataToSend()) {
-		if (pendingPackets_.empty()) {
-			return;
-		}
-		const Packet& packet = pendingPackets_.front();
-		bufferWriter_.addBufferToSend(packet.buffer.data(), packet.buffer.size());
-		if (packet.data != nullptr) {
-			bufferWriter_.addBufferToSend(packet.data, packet.dataSize);
-		}
-	}
 
-	ssize_t bytesSent = bufferWriter_.writeTo(chainHeadFd_);
-	if (bytesSent == 0) {
-		throw ChunkserverConnectionException("Write error: connection closed by peer", server());
-	} else if (bytesSent < 0 && tcpgetlasterror() != TCPEAGAIN) {
-		throw ChunkserverConnectionException(
-				"Write error: " + std::string(strerr(tcpgetlasterror())), server());
-	}
-	if (!bufferWriter_.hasDataToSend()) {
-		bufferWriter_.reset();
-		pendingPackets_.pop_front();
+	while (true) {
+		if (!bufferWriter_.hasDataToSend()) {
+			if (pendingPackets_.empty()) { return; }
+			const Packet &packet = pendingPackets_.front();
+			bufferWriter_.addBufferToSend(packet.buffer.data(), packet.buffer.size());
+			if (packet.data != nullptr) {
+				bufferWriter_.addBufferToSend(packet.data, packet.dataSize);
+			}
+		}
+
+		ssize_t bytesSent = bufferWriter_.writeTo(chainHeadFd_);
+		// safs::log_warn("DAVE: sent {} bytes to chunkserver {}", bytesSent, server().toString());
+		if (bytesSent == 0) {
+			throw ChunkserverConnectionException("Write error: connection closed by peer",
+			                                     server());
+		} else if (bytesSent < 0 && tcpgetlasterror() != TCPEAGAIN) {
+			throw ChunkserverConnectionException(
+			    "Write error: " + std::string(strerr(tcpgetlasterror())), server());
+		}
+		if (!bufferWriter_.hasDataToSend()) {
+			bufferWriter_.reset();
+			pendingPackets_.pop_front();
+		}
 	}
 }
 

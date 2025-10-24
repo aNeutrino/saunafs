@@ -597,9 +597,10 @@ void ChunkserverEntry::checkNextPacket() {
 		return;
 	}
 
-	if (inputBuffer != nullptr && !inputBuffer->isBeingUpdated()) {
-		writeCurrentInputPacket();
-	}
+	// Leave write job to flush and when full
+	// if (inputBuffer != nullptr && !inputBuffer->isBeingUpdated()) {
+	// 	writeCurrentInputPacket();
+	// }
 }
 
 // Write operations
@@ -750,8 +751,8 @@ void ChunkserverEntry::writeData(const uint8_t *data, PacketHeader::Type type,
 
 	inputBuffer->setupLastWriteOperation(blocknum, opOffset, opSize, writeId, crc);
 
-	// No write jobs in progress or current input buffer is full - write it
-	if (!isWriteJobBeingProcessed() || inputBuffer->isFull()) {
+	// Input buffer is full - write it
+	if (inputBuffer->isFull()) {
 		writeCurrentInputPacket();
 	}
 }
@@ -779,6 +780,44 @@ void ChunkserverEntry::writeStatus(const uint8_t *data, PacketHeader::Type type,
 	}
 
 	updateUsingWriteStatusAndReply(status, writeId);
+}
+
+void ChunkserverEntry::writeFlush(const uint8_t *data, uint32_t length) {
+	TRACETHIS();
+	uint64_t opChunkId;
+
+	try {
+		cltocs::writeFlush::deserialize(data, length, opChunkId);
+	} catch (IncorrectDeserializationException&) {
+		safs::log_info("Received malformed WRITE_END message (length: {})", length);
+		state = State::WriteFinish;
+		return;
+	}
+	if (opChunkId != chunkId) {
+		safs::log_info(
+		    "Received malformed WRITE_FLUSH message (got chunkId={:016X}, expected {:016X})",
+		    opChunkId, chunkId);
+		state = State::WriteFinish;
+		return;
+	}
+	if (writeJobId > 0) {
+		// safs::log_warn(
+		//     "DAVE1: writeFlush: starting flush job for chunkId: {}, chunkVersion: {}, chunkType: {}",
+		//     chunkId, chunkVersion, chunkType.toString());
+		// Already processing some write - cannot flush now
+		if (inputBuffer != nullptr) { inputBuffer->setReadyForFlushing(true); }
+		return;
+	}
+
+	if (inputBuffer == nullptr) {
+		// safs::log_warn(
+		//     "DAVE2: writeFlush: starting flush job for chunkId: {}, chunkVersion: {}, chunkType: {}",
+		//     chunkId, chunkVersion, chunkType.toString());
+		// There is no input buffer being filled - nothing to flush
+		return;
+	}
+
+	writeCurrentInputPacket();
 }
 
 void ChunkserverEntry::writeEnd(const uint8_t *data, uint32_t length) {
@@ -1062,6 +1101,9 @@ void ChunkserverEntry::gotPacket(uint32_t type, const uint8_t *data,
 		case SAU_CLTOCS_WRITE_DATA:
 			writeData(data, type, length);
 			break;
+		case SAU_CLTOCS_WRITE_FLUSH:
+			writeFlush(data, length);
+			break;
 		case SAU_CLTOCS_WRITE_END:
 			writeEnd(data, length);
 			break;
@@ -1102,12 +1144,12 @@ void ChunkserverEntry::gotPacket(uint32_t type, const uint8_t *data,
 }
 
 bool ChunkserverEntry::processRWBytes(int bytesRW, PacketStruct &packet, bool shouldForwardError,
-                                      const char *callerName, bool isRead) {
+                                      const char *callerName, bool isRead, bool isDataExpected) {
 	if (bytesRW == 0) {
 		if (shouldForwardError) {
 			safs::log_info("({}) {} returned 0 bytes", callerName, isRead ? "read" : "write");
 			fwdError();
-		} else {
+		} else if (isDataExpected) {
 			state = State::Close;
 		}
 
@@ -1121,7 +1163,7 @@ bool ChunkserverEntry::processRWBytes(int bytesRW, PacketStruct &packet, bool sh
 
 			if (shouldForwardError) {
 				fwdError();
-			} else {
+			} else if (isDataExpected) {
 				state = State::Close;
 			}
 		}
@@ -1140,7 +1182,7 @@ bool ChunkserverEntry::processRWBytes(int bytesRW, PacketStruct &packet, bool sh
 }
 
 bool ChunkserverEntry::readHeader(int socket, PacketStruct &packet, uint8_t *headerBuf,
-                                  Mode &targetMode) {
+                                  Mode &targetMode, bool isDataExpected) {
 	// At this point, packet.startPtr points to the current position in the header buffer,
 	// and packet.bytesLeft is the number of bytes remaining to read to complete the header.
 	// Therefore, packet.startPtr + packet.bytesLeft should equal headerBuf + PacketHeader::kSize,
@@ -1153,7 +1195,9 @@ bool ChunkserverEntry::readHeader(int socket, PacketStruct &packet, uint8_t *hea
 
 	auto bytesRead = ::read(socket, packet.startPtr, packet.bytesLeft);
 
-	if (!processRWBytes(bytesRead, packet, fromForward, __func__, true)) { return false; }
+	if (!processRWBytes(bytesRead, packet, fromForward, __func__, true, isDataExpected)) {
+		return false;
+	}
 
 	if (packet.bytesLeft > 0) { return false; }
 
@@ -1332,16 +1376,18 @@ void ChunkserverEntry::forward() {
 	}
 }
 
-void ChunkserverEntry::readFromSocket() {
+bool ChunkserverEntry::readFromSocket(bool isDataExpected) {
 	TRACETHIS();
 
-	if (mode == Mode::Header && !readHeader(sock, inputPacket, headerBuffer, mode)) { return; }
+	if (mode == Mode::Header && !readHeader(sock, inputPacket, headerBuffer, mode, isDataExpected)) { return false; }
 
 	if (mode == Mode::Data) {
-		if (!readData(sock, inputPacket)) { return; }
+		if (!readData(sock, inputPacket)) { return false; }
 
 		processPacket(inputPacket, headerBuffer, mode, false);
+		return true;
 	}
+	return false;
 }
 
 void ChunkserverEntry::writeToSocket() {

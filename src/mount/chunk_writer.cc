@@ -190,8 +190,20 @@ uint32_t ChunkWriter::startNewOperations(bool can_expect_next_block) {
 		if (!canStartOperation(operation)) {
 			break;
 		}
+		// safs::log_warn("DAVE: started operation for chunk {}, offset {}, size {}, unfinishedWrites {}",
+		//                locator_->chunkIndex(), operation.journalPositions.front()->offsetInFile(),
+		//                operation.offsetOfEnd - operation.journalPositions.front()->offsetInFile(),
+		//                operation.unfinishedWrites);
 		startOperation(std::move(operation));
 		++operationsStarted;
+	}
+
+	if (!acceptsNewOperations_) {
+		// We are in flush mode -- finish all the operations as soon as possible
+		// Wont't do anything if there are no operations to start
+		for (auto &executorPair : executors_) {
+			executorPair.second->addFlushPacket();
+		}
 	}
 	return operationsStarted;
 }

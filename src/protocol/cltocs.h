@@ -137,6 +137,26 @@ static const uint32_t kPrefixSize = 4 + 8 + 4 + 2 + 4 + 4 + 4;
 
 } // namespace writeData
 
+namespace writeFlush {
+
+const PacketVersion kECChunks = 0;
+
+inline void serialize(std::vector<uint8_t>& destination, uint64_t chunkId) {
+	serializePacket(destination, SAU_CLTOCS_WRITE_FLUSH, kECChunks, chunkId);
+}
+
+inline void deserialize(const uint8_t* source, uint32_t sourceSize,
+		uint64_t& chunkId) {
+	verifyPacketVersionNoHeader(source, sourceSize, kECChunks);
+	deserializePacketDataNoHeader(source, sourceSize, chunkId);
+}
+
+// kPrefixSize is equal to:
+// version:u32 chunkId:u64
+static const uint32_t kPrefixSize = 4 + 8;
+
+} // namespace writeFlush
+
 namespace writeEnd {
 
 inline void serialize(std::vector<uint8_t>& destination, uint64_t chunkId) {

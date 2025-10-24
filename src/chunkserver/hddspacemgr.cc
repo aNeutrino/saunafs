@@ -949,6 +949,8 @@ int hddChunkWriteFullBlocks(uint64_t chunkId, uint32_t version, ChunkPartType ch
 		return -SAUNAFS_ERROR_NOCHUNK;
 	}
 
+	safs::log_warn("DAVE: hddChunkWriteFullBlocks: chunkId {}, version {}, type {}, startBlock {}, numBlocks {}, owner path {}",
+	               chunkId, version, chunkType.toString(), startBlock, numBlocks, chunk->owner()->getPaths());
 	auto *crcData = gOpenChunks.getResource(chunk->metaFD()).crcData();
 	int status = chunk->owner()->writeChunkBlocks(chunk, version, startBlock, numBlocks, crcList,
 	                                              crcData, buffer);
@@ -2538,6 +2540,8 @@ void hddFreeResourcesThread() {
 		hddReleaseDisksToBeDeleted();
 		/// Release buffers older than kDelayedStep seconds
 		releaseOldIoBuffers(kOldIoBuffersExpirationTimeMs);
+		// safs::log_warn("DAVE: current gRemainingBufferedBlockWrites = {}",
+		//                gRemainingBufferedBlockWrites.load());
 
 		sleep(kDelayedStep);
 	}

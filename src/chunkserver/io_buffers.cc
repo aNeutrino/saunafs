@@ -267,6 +267,8 @@ void InputBuffer::clear() {
 	headerBuffer_.clear();
 	writeInfo_.clear();
 	isBeingUpdated_ = false;
+	isReadyForFlushing_ = false;
+	isReplied = false;
 }
 
 void InputBuffer::addNewWriteOperation() {
