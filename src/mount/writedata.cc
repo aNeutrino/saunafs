@@ -1108,6 +1108,7 @@ struct inodedata {
 	std::condition_variable flushcond;  // wait for !inqueue (flush): using globalLock
 	std::condition_variable writecond;  // wait for flushwaiting==0 (write): using inodeLock
 	std::list<ChunkDataPtr> chunkDataList;
+	ChunkData *lastChunkData = nullptr;  // inodeLock
 	std::atomic_bool emptyChunkDataList = true;
 	std::atomic<uint64_t> totalCachedBlocks = 0;
 	std::mutex mutex;
@@ -1641,13 +1642,14 @@ void ChunkJobWriter::processJob(ChunkData *chunkData) {
 				chunkData_->tryCounter = 1;
 			}
 			// Keep the lock
+			auto chunkId = locator->locationInfo().chunkId;
 			chunkData_->locator = std::move(locator);
 			// Move data left in the journal into front of the write cache
 			returnJournalToDataChain(writer.releaseJournal(), inodeLock);
 			inodeLock.unlock();
 
-			safs::log_warn("write file error, inode: {}, index: {} - {}", parent->inode,
-			               chunkIndex_, errorString.c_str());
+			safs::log_warn("write file error, inode: {}, index: {}, chunkId: {} - {}", parent->inode,
+			               chunkIndex_, chunkId, errorString.c_str());
 			if (chunkData_->tryCounter >= maxretries) {
 				// Convert error to an unrecoverable error
 				throw UnrecoverableWriteException(e.message(), e.status());
@@ -1723,7 +1725,11 @@ void ChunkJobWriter::processDataChain(ChunkWriter &writer) {
 
 				inodeLock.lock();
 			}
-			if (chunkData_->requiresFlushing() && !haveAnyBlockInCurrentChunk(inodeLock)) {
+			// if (blocksPut > 0) {
+			// 	safs::log_warn("DAVE: added {} blocks for inode {}, chunk {}, current fcb {}",
+			// 	               blocksPut, parent->inode, chunkIndex_, freecacheblocks.load());
+			// }
+			if ((chunkData_->requiresFlushing() || chunkData_ != parent->lastChunkData) && !haveAnyBlockInCurrentChunk(inodeLock)) {
 				// No more data and some flushing is needed or required, so flush everything
 				// safs::log_warn("DAVE: calling startFlushMode for inode {}, chunk {}, current fcb {}",
 				//                parent->inode, chunkIndex_, freecacheblocks.load());
@@ -1915,6 +1921,7 @@ int write_block(ChunkData *chunkData, uint16_t pos, uint32_t from, uint32_t to, 
 	//                parent->inode, chunkData->chunkIndex, pos, from, to);
 	chunkData->pushToChain(
 	    WriteCacheBlock(chunkData->chunkIndex, pos, WriteCacheBlock::kWritableBlock));
+	parent->lastChunkData = chunkData;
 	sassert(chunkData->dataChain.back().expand(from, to, data));
 	Lock globalLock(gMutex, std::defer_lock);
 	if (chunkData->inQueue) {

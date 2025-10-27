@@ -100,7 +100,7 @@ void WriteExecutor::addDataPacket(uint32_t writeId,
 	packet.dataSize = size;
 
 	writeDataPacketsSinceLastFlush++;
-	if (writeDataPacketsSinceLastFlush >= 8) {
+	if (writeDataPacketsSinceLastFlush >= 15) {
 		addFlushPacket();
 	}
 
@@ -133,15 +133,23 @@ void WriteExecutor::addEndPacket() {
 void WriteExecutor::sendData() {
 	LOG_AVG_TILL_END_OF_SCOPE0("WriteExecutor::sendData");
 
+	// int timesWritten = 0;
 	while (true) {
 		if (!bufferWriter_.hasDataToSend()) {
-			if (pendingPackets_.empty()) { return; }
+			if (pendingPackets_.empty()) {
+				// if (timesWritten > 0) {
+				// 	safs::log_warn("({}) No more data to send to chunkserver {}, timesWritten {}",
+				// 	               __func__, server().toString(), timesWritten);
+				// }
+				return;
+			}
 			const Packet &packet = pendingPackets_.front();
 			bufferWriter_.addBufferToSend(packet.buffer.data(), packet.buffer.size());
 			if (packet.data != nullptr) {
 				bufferWriter_.addBufferToSend(packet.data, packet.dataSize);
 			}
 		}
+		// timesWritten++;
 
 		ssize_t bytesSent = bufferWriter_.writeTo(chainHeadFd_);
 		// safs::log_warn("DAVE: sent {} bytes to chunkserver {}", bytesSent, server().toString());

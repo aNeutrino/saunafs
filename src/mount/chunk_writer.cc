@@ -270,6 +270,9 @@ void ChunkWriter::processOperations(uint32_t msTimeout) {
 			}
 
 			if (executor.serverTimedOut()) {
+				// safs::log_warn("DAVE: abc chunkId {} server {} timed out",
+				//                locator_->locationInfo().chunkId,
+				//                executor.server().toString());
 				throw ChunkserverConnectionException("Chunkserver timed out", executor.server());
 			}
 		}
