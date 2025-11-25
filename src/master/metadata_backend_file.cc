@@ -642,7 +642,15 @@ static int fs_lostnode(FSNode *p) {
 		}
 		HString name((const char *)artname, l);
 		if (!gFSOperations->nodeOperations()->isNameUsed(gMetadata->root, name)) {
-			gFSOperations->nodeOperations()->link(0, gMetadata->root, p, name);
+			auto fsOpContext = gFSOperations->createFilesystemOperationContext(
+			    FilesystemOperationContext::TransactionType::kReadWrite);
+			
+			gFSOperations->nodeOperations()->link(fsOpContext, 0, gMetadata->root, p, name);
+
+			if (fsOpContext.hasReadWriteTransaction()) {
+				fsOpContext.getReadWriteTransaction()->commit();
+			}
+
 			return 1;
 		}
 		i++;

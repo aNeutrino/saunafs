@@ -142,6 +142,7 @@ void KVConnectorFDB::onChangelogEvent(const ChangelogEvent &event) {
 }
 
 void KVConnectorFDB::onNodeChanged(FSNode *node) {
+	safs::log_info("GUILLEX: onNodeChanged for node {}", node->id);
 	auto transaction = kvEngine_->createReadWriteTransaction();
 
 	// Key

@@ -27,6 +27,7 @@
 #include "common/attributes.h"
 #include "common/type_defs.h"
 #include "master/filesystem_node_types.h"
+#include "master/filesystem_operation_context.h"
 #include "master/filesystem_trash_reserved_files.h"
 #include "master/fs_context.h"
 #include "protocol/directory_entry.h"
@@ -44,15 +45,26 @@ struct NamedInodeEntry;
 
 using ChunkCountArray = std::array<uint32_t, CHUNK_MATRIX_SIZE>;
 
+inline constexpr size_t kMaxFileNameLength = 255;
+
+/// All permission bits (including setuid/setgid/sticky)
+inline constexpr uint16_t kPermissionsMask = 07777;
+/// Standard rwx permissions (excludes setuid/setgid/sticky)
+inline constexpr uint16_t kStandardPermissionsMask = 0777;
+inline constexpr uint16_t kExtraAttributesMask = 0xF000;  ///< Bits 12-15 for extra attributes
+
+/// Default undelete directory mode
+inline constexpr uint16_t kUndelDirectoryMode = 0755;
+
 // Extra attributes constants and type aliases
-static constexpr uint8_t kMaxExtraAttributes = 16;
+inline constexpr uint8_t kMaxExtraAttributes = 16;
 using ExtraAttributesArray = std::array<uint32_t, kMaxExtraAttributes>;
 
 // Directory entry serialization constants
-static constexpr size_t kDirEntryWithAttributesSize = kinode_t_size + kAttributesSize;
-static constexpr size_t kDirEntryWithoutAttributesSize = kinode_t_size + 1;  // +1 for node type
-static constexpr size_t kDotEntrySize = 1;      // "." (1 byte)
-static constexpr size_t kDotDotEntrySize = 2;   // ".." (2 bytes)
+inline constexpr size_t kDirEntryWithAttributesSize = kinode_t_size + kAttributesSize;
+inline constexpr size_t kDirEntryWithoutAttributesSize = kinode_t_size + 1;  // +1 for node type
+inline constexpr size_t kDotEntrySize = 1;                                   // "." (1 byte)
+inline constexpr size_t kDotDotEntrySize = 2;                                // ".." (2 bytes)
 
 /// Interface for filesystem node operations extensibility.
 ///
@@ -73,6 +85,7 @@ public:
 
 	// Type-safe node lookup operations
 
+	/// Looks up a node by its inode and verifies its type.
 	template <class NodeType>
 	NodeType *idToNodeVerify(inode_t inode) {
 		auto *node = static_cast<NodeType *>(this->idToNodeInternal(inode));
@@ -80,21 +93,40 @@ public:
 		return node;
 	}
 
+	/// Looks up a node by its inode and context, and verifies its type.
+	template <class NodeType>
+	NodeType *idToNodeVerify(const FilesystemOperationContext &fsOpContext, inode_t inode) {
+		auto *node = static_cast<NodeType *>(this->idToNodeInternal(fsOpContext, inode));
+		this->checkNodeType(node);
+		return node;
+	}
+
+	/// Looks up a node by its inode.
 	template <class NodeType = FSNode>
 	NodeType *idToNode(inode_t inode) {
 		return static_cast<NodeType *>(this->idToNodeInternal(inode));
 	}
 
+	/// Looks up a node by its inode and context.
+	template <class NodeType = FSNode>
+	NodeType *idToNode(const FilesystemOperationContext &fsOpContext, inode_t inode) {
+		return static_cast<NodeType *>(this->idToNodeInternal(fsOpContext, inode));
+	}
+
+	/// Returns the root node of the filesystem.
+	virtual FSNodeDirectory *getRootNode(const FilesystemOperationContext &fsOpContext) = 0;
+
 	// Main node operations
 
 	virtual FSNode *lookup(FSNodeDirectory *node, const HString &name) const = 0;
 
-	virtual FSNode *createNode(uint32_t timeStamp, FSNodeDirectory *parent, const HString &name,
-	                           FSNodeType type, uint16_t mode, uint16_t umask, uint32_t uid,
-	                           uint32_t gid, uint8_t copysgid, AclInheritance inheritAcl,
+	virtual FSNode *createNode(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	                           FSNodeDirectory *parent, const HString &name, FSNodeType type,
+	                           uint16_t mode, uint16_t umask, uint32_t uid, uint32_t gid,
+	                           uint8_t copysgid, AclInheritance inheritAcl,
 	                           inode_t requestedINode = 0) = 0;
-	virtual void link(uint32_t timeStamp, FSNodeDirectory *parent, FSNode *child,
-	                  const HString &name) = 0;
+	virtual void link(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	                  FSNodeDirectory *parent, FSNode *child, const HString &name) = 0;
 	virtual void unlink(uint32_t timeStamp, FSNodeDirectory *parent, const HString &childName,
 	                    FSNode *childNode) = 0;
 	virtual void removeEdge(uint32_t timeStamp, FSNodeDirectory *parent, const HString &childName,
@@ -143,7 +175,8 @@ public:
 	// Trash/Reserved operations
 
 	virtual int purge(uint32_t timeStamp, FSNode *node) = 0;
-	virtual uint8_t undel(uint32_t timeStamp, FSNodeFile *node) = 0;
+	virtual uint8_t undel(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	                      FSNodeFile *node) = 0;
 #ifndef METARESTORE
 	virtual uint32_t getDetachedSize(const TrashPathContainer &data) = 0;
 	virtual void getDetachedData(const TrashPathContainer &data, uint8_t *outBuffer) = 0;
@@ -217,8 +250,10 @@ public:
 	/// if inode != rootinode, then returns some node
 	/// Checks for permissions needed to perform the operation (defined by modeMask).
 	/// Can return a reserved node or a node from trash.
-	virtual uint8_t getNodeForOperation(const FsContext &context, ExpectedNodeType expectedNodeType,
-	                                    uint8_t modeMask, inode_t inode, FSNode **nodeOut,
+	virtual uint8_t getNodeForOperation(const FsContext &context,
+	                                    const FilesystemOperationContext &fsOpContext,
+	                                    ExpectedNodeType expectedNodeType, uint8_t modeMask,
+	                                    inode_t inode, FSNode **nodeOut,
 	                                    FSNodeDirectory **rootDirOut = nullptr) = 0;
 
 	// Ancestry operations
@@ -235,8 +270,22 @@ public:
 	virtual FSNodeDirectory *getFirstParent(FSNode *node) = 0;
 
 protected:
-	// Core node lookup operation - override in subclasses for custom storage
+	/// Core node lookup operation - override in subclasses for custom storage.
+	/// @param inode The inode of the node to look up.
+	/// @return Pointer to the node if found, nullptr otherwise.
 	virtual FSNode *idToNodeInternal(inode_t inode) = 0;
+
+	/// Core node lookup operation with context - override in subclasses for custom storage.
+	/// @param context The FS context for the operation, potentially carrying a transaction.
+	/// @param inode The inode of the node to look up.
+	/// @return Pointer to the node if found, nullptr otherwise.
+	virtual FSNode *idToNodeInternal(const FilesystemOperationContext &fsOpContext,
+	                                 inode_t inode) = 0;
+
+	/// Increases the node counters for the specified type.
+	/// @param type The node type of whose related counters are to be updated.
+	virtual void incrementNodeCounters(const FilesystemOperationContext &fsOpContext,
+	                                   FSNodeType type) = 0;
 
 	// Type checking helper - base case
 	template <class NodeType>

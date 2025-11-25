@@ -35,14 +35,17 @@
 /// assuming an in-memory metadata representation.
 class FilesystemNodeOperationsBase : public IFilesystemNodeOperations {
 public:
+	/// Returns the root node of the filesystem.
+	FSNodeDirectory *getRootNode(const FilesystemOperationContext &fsOpContext) override;
+
 	FSNode *lookup(FSNodeDirectory *node, const HString &name) const override;
 
-	FSNode *createNode(uint32_t timeStamp, FSNodeDirectory *parent, const HString &name,
-	                   FSNodeType type, uint16_t mode, uint16_t umask, uint32_t uid, uint32_t gid,
-	                   uint8_t copysgid, AclInheritance inheritAcl,
-	                   inode_t requestedINode = 0) override;
-	void link(uint32_t timeStamp, FSNodeDirectory *parent, FSNode *child,
-	          const HString &name) override;
+	FSNode *createNode(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	                   FSNodeDirectory *parent, const HString &name, FSNodeType type, uint16_t mode,
+	                   uint16_t umask, uint32_t uid, uint32_t gid, uint8_t copysgid,
+	                   AclInheritance inheritAcl, inode_t requestedINode = 0) override;
+	void link(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	          FSNodeDirectory *parent, FSNode *child, const HString &name) override;
 	void unlink(uint32_t timeStamp, FSNodeDirectory *parent, const HString &childName,
 	            FSNode *childNode) override;
 	void removeEdge(uint32_t timeStamp, FSNodeDirectory *parent, const HString &childName,
@@ -84,7 +87,8 @@ public:
 
 	// Trash/Reserved operations
 	int purge(uint32_t timeStamp, FSNode *node) override;
-	uint8_t undel(uint32_t timeStamp, FSNodeFile *node) override;
+	uint8_t undel(const FilesystemOperationContext &fsOpContext, uint32_t timeStamp,
+	              FSNodeFile *node) override;
 #ifndef METARESTORE
 	uint32_t getDetachedSize(const TrashPathContainer &data) override;
 	void getDetachedData(const TrashPathContainer &data, uint8_t *outBuffer) override;
@@ -149,9 +153,10 @@ public:
 
 	/// Treating rootinode as the root of the hierarchy, converts (rootinode, inode) to FSNode*.
 	/// @see IFilesystemNodeOperations::getNodeForOperation
-	uint8_t getNodeForOperation(const FsContext &context, ExpectedNodeType expectedNodeType,
-	                            uint8_t modeMask, inode_t inode, FSNode **nodeOut,
-	                            FSNodeDirectory **rootDirOut = nullptr) override;
+	uint8_t getNodeForOperation(const FsContext &context,
+	                            const FilesystemOperationContext &fsOpContext,
+	                            ExpectedNodeType expectedNodeType, uint8_t modeMask, inode_t inode,
+	                            FSNode **nodeOut, FSNodeDirectory **rootDirOut = nullptr) override;
 
 	// Ancestry operations
 
@@ -166,8 +171,23 @@ public:
 	FSNodeDirectory *getFirstParent(FSNode *node) override;
 
 protected:
-	/// Internal node lookup operation - override in subclasses for custom storage
+	/// Internal node lookup operation - override in subclasses for custom storage.
+	/// @see IFilesystemNodeOperations::idToNodeInternal
 	FSNode *idToNodeInternal(inode_t inode) override;
+
+	/// Internal node lookup operation with context - override in subclasses for custom storage.
+	/// @see IFilesystemNodeOperations::idToNodeInternal
+	FSNode *idToNodeInternal(const FilesystemOperationContext &fsOpContext, inode_t inode) override;
+
+	/// Increases the node counters for the specified type.
+	/// @see IFilesystemNodeOperations::incrementNodeCounters
+	void incrementNodeCounters(const FilesystemOperationContext &fsOpContext,
+	                           FSNodeType type) override;
+
+	virtual void preserveNode(const FilesystemOperationContext &fsOpContext, FSNode *node);
+
+	virtual void preserveEdge(const FilesystemOperationContext &fsOpContext,
+	                          FSNodeDirectory *parent, FSNode *child, hstorage::Handle *handlePtr);
 
 private:
 	// Private helpers
