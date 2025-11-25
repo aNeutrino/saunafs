@@ -90,6 +90,20 @@ struct threc {
 	}
 };
 
+/// Context of the TLS channel used for communication with EFS master.
+///
+/// If no TLS is used, this is `nullptr`.
+std::unique_ptr<TlsSession> tlsSession;
+
+/// Keeps GnuTLS initialized.
+static std::unique_ptr<GnuTlsGlobalResources> gGnutlsGlobalResources;
+
+/// TLS related parameters
+bool gIsTlsEnabled;
+std::string tlsCertFile;
+std::string tlsKeyFile;
+std::string tlsServerCaCertDir;
+
 #define DEFAULT_OUTPUT_BUFFSIZE 0x1000
 #define DEFAULT_INPUT_BUFFSIZE 0x10000
 #define NO_DATA_RECEIVED_FROM_MASTER NULL
@@ -200,6 +214,51 @@ struct InitParams {
 };
 
 static InitParams gInitParams;
+
+/// Starts or continues a TLS handshake.
+/// \return true if the handshake completed successfully, false otherwise.
+bool fs_tlshandshake() {
+	if (tlsSession == nullptr) { return false; }
+
+	int ret = gnutls_handshake(tlsSession->session());
+	if (ret == 0) {
+		return true;
+	} else if (ret < 0) {
+		if (!gnutls_error_is_fatal(ret)) {
+			// Non-fatal error, handshake can be retried.
+			return false;
+		} else {
+			// Fatal error, log and fail.
+			safs::log_warn("TLS handshake failed - {}", std::string(gnutls_strerror(ret)));
+			return false;
+		}
+	}
+
+	return false;
+}
+
+inline int fs_write(int fd, const void *buf, size_t count, int timeout_ms) {
+	if (tlsSession) { gnutls_record_send(tlsSession->session(), buf, count); }
+
+	return tcptowrite(fd, buf, count, timeout_ms);
+}
+
+inline int fs_read(int fd, void *buf, size_t count, int timeout_ms) {
+	if (tlsSession) { return gnutls_record_recv(tlsSession->session(), buf, count); }
+
+	return tcptoread(fd, buf, count, timeout_ms);
+}
+
+void fs_close(void) {
+	if (tlsSession != nullptr) {
+		gnutls_bye(tlsSession->session(), GNUTLS_SHUT_WR);
+		gGnutlsGlobalResources.reset();
+		tlsSession.reset();
+	}
+
+	tcpclose(fd);
+	fd = -1;
+}
 
 void wrap_write_init(bool isFromMainThread) {
 	bool useInodeBasedWriteAlgorithm = gSaunaFSInitParams.use_inode_based_write_algorithm;
@@ -391,7 +450,7 @@ static bool fs_threc_flush(threc *rec) {
 	}
 	std::unique_lock<std::mutex> lock(rec->mutex);
 	const int32_t size = rec->outputBuffer.size();
-	if (tcptowrite(fd, rec->outputBuffer.data(), size, 1000) != size) {
+	if (fs_write(fd, rec->outputBuffer.data(), size, 1000) != size) {
 		safs_pretty_syslog(LOG_WARNING, "tcp send error: %s", strerr(tcpgetlasterror()));
 		disconnect = true;
 		return false;
@@ -779,7 +838,7 @@ int fs_register_with_get_random(std::vector<std::uint8_t> &registrationMessageBu
 	messageToMaster += kFuseRegisterBlobAclLength;
 	put8bit(&messageToMaster, REGISTER_GETRANDOM);
 
-	if (tcptowrite(fd, registrationMessageBuffer.data(), registerWithGetRandomRequestLength,
+	if (fs_write(fd, registrationMessageBuffer.data(), registerWithGetRandomRequestLength,
 	               kDefaultTcpCommTimeoutMSeconds) !=
 	    (int32_t)(registerWithGetRandomRequestLength)) {
 		if (verbose) {
@@ -787,20 +846,20 @@ int fs_register_with_get_random(std::vector<std::uint8_t> &registrationMessageBu
 		} else {
 			safs::log_warn("error sending data to sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
-	if (tcptoread(fd, registrationMessageBuffer.data(), registerTotalHeaderInfoLength,
+	if (fs_read(fd, registrationMessageBuffer.data(), registerTotalHeaderInfoLength,
 	              kDefaultTcpCommTimeoutMSeconds) != (int32_t)(registerTotalHeaderInfoLength)) {
 		if (verbose) {
 			fprintf(stderr, "error receiving data from sfsmaster\n");
 		} else {
 			safs::log_warn("error receiving data from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -812,8 +871,8 @@ int fs_register_with_get_random(std::vector<std::uint8_t> &registrationMessageBu
 		} else {
 			safs::log_warn("got incorrect answer from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -824,20 +883,20 @@ int fs_register_with_get_random(std::vector<std::uint8_t> &registrationMessageBu
 		} else {
 			safs::log_warn("got incorrect answer from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
-	if (tcptoread(fd, registrationMessageBuffer.data(), kMasterResponseRegisterPacketLength,
+	if (fs_read(fd, registrationMessageBuffer.data(), kMasterResponseRegisterPacketLength,
 	              kDefaultTcpCommTimeoutMSeconds) != (int32_t)kMasterResponseRegisterPacketLength) {
 		if (verbose) {
 			fprintf(stderr, "error receiving data from sfsmaster\n");
 		} else {
 			safs::log_warn("error receiving data from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -904,7 +963,7 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 		memcpy(messageToMaster + subfolderPathLength, passwordDigest.data(), passwordDigestLength);
 	}
 
-	if (tcptowrite(fd, registrationMessageBuffer.data(), fuseRegisterNewSessionRequestLength,
+	if (fs_write(fd, registrationMessageBuffer.data(), fuseRegisterNewSessionRequestLength,
 	               kDefaultTcpCommTimeoutMSeconds) !=
 	    (int32_t)(fuseRegisterNewSessionRequestLength)) {
 		if (verbose) {
@@ -912,12 +971,12 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 		} else {
 			safs::log_warn("error sending data to sfsmaster: {}", strerr(tcpgetlasterror()));
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
-	if (tcptoread(fd, registrationMessageBuffer.data(), registerTotalHeaderInfoLength,
+	if (fs_read(fd, registrationMessageBuffer.data(), registerTotalHeaderInfoLength,
 	              kDefaultTcpCommTimeoutMSeconds) != (int32_t)(registerTotalHeaderInfoLength)) {
 		int tcplasterr = tcpgetlasterror();
 		const auto *errorMessage = (tcplasterr != 0) ? strerr(tcplasterr) : strerr(TCPNORESPONSE);
@@ -926,8 +985,8 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 		} else {
 			safs::log_warn("error receiving data from sfsmaster: {}", errorMessage);
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -939,8 +998,8 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 		} else {
 			safs::log_warn("got incorrect answer from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -961,20 +1020,20 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 		} else {
 			safs::log_warn("got incorrect answer from sfsmaster");
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
-	if (tcptoread(fd, registrationMessageBuffer.data(), messageValueIterator,
+	if (fs_read(fd, registrationMessageBuffer.data(), messageValueIterator,
 	              kDefaultTcpCommTimeoutMSeconds) != (int32_t)messageValueIterator) {
 		if (verbose) {
 			fprintf(stderr, "error receiving data from sfsmaster: %s\n", strerr(tcpgetlasterror()));
 		} else {
 			safs::log_warn("error receiving data from sfsmaster: {}", strerr(tcpgetlasterror()));
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -987,8 +1046,8 @@ int fs_register_with_new_session(std::vector<std::uint8_t> &registrationMessageB
 			safs::log_warn("sfsmaster register error: {}",
 			               saunafs_error_string(messageFromMaster[0]));
 		}
-		tcpclose(fd);
-		fd = -1;
+
+		fs_close();
 		return -1;
 	}
 
@@ -1086,6 +1145,30 @@ int fs_connect(bool verbose) {
 	fd = fs_open_master_connection(verbose);
 	if (fd < 0) { return -1; }
 
+	if (gIsTlsEnabled) {
+		tlsSession.reset(
+		    new TlsSession(fd, GNUTLS_CLIENT, tlsKeyFile, tlsCertFile, tlsServerCaCertDir));
+
+		auto startTlsRequest = cltoma::startTls::build();
+		ssize_t ret = write(fd, startTlsRequest.data(), startTlsRequest.size());
+		if (ret < 0) {
+			safs::log_err("cannot transmit startTls request to EFS master");
+			fs_close();
+			return -1;
+		} else if (ret != static_cast<int>(startTlsRequest.size())) {
+			safs::log_err(
+			    "cannot transmit startTls request to EFS master: send(len={} ) returned {}",
+			    startTlsRequest.size(), ret);
+			fs_close();
+			return -1;
+		}
+
+		if (!fs_tlshandshake()) {
+			fs_close();
+			return -1;
+		}
+	}
+
 	if (havepassword &&
 	    fs_register_with_get_random(registrationMessageBuffer, passwordDigest, verbose) < 0) {
 		return -1;
@@ -1155,7 +1238,7 @@ void fs_reconnect() {
 	put16bit(&wptr,SAUNAFS_PACKAGE_VERSION_MAJOR);
 	put8bit(&wptr,SAUNAFS_PACKAGE_VERSION_MINOR);
 	put8bit(&wptr,SAUNAFS_PACKAGE_VERSION_MICRO);
-	if (tcptowrite(fd,regbuff,8+64+9,1000)!=8+64+9) {
+	if (fs_write(fd,regbuff,8+64+9,1000)!=8+64+9) {
 		safs_pretty_syslog(LOG_WARNING,"master: register error (write: %s)",strerr(tcpgetlasterror()));
 		tcpclose(fd);
 		fd=-1;
@@ -1163,7 +1246,7 @@ void fs_reconnect() {
 	}
 	stats_inc(MASTER_BYTESSENT, statsptr, 16 + 64);
 	stats_inc(MASTER_PACKETSSENT, statsptr);
-	if (tcptoread(fd,regbuff,8,1000)!=8) {
+	if (fs_read(fd,regbuff,8,1000)!=8) {
 		safs_pretty_syslog(LOG_WARNING,"master: register error (read header: %s)",strerr(tcpgetlasterror()));
 		tcpclose(fd);
 		fd=-1;
@@ -1185,7 +1268,7 @@ void fs_reconnect() {
 		fd=-1;
 		return;
 	}
-	if (tcptoread(fd,regbuff,i,1000)!=(int32_t)i) {
+	if (fs_read(fd,regbuff,i,1000)!=(int32_t)i) {
 		safs_pretty_syslog(LOG_WARNING,"master: register error (read data: %s)",strerr(tcpgetlasterror()));
 		tcpclose(fd);
 		fd=-1;
@@ -1219,7 +1302,7 @@ void fs_close_session(void) {
 	wptr+=64;
 	put8bit(&wptr,REGISTER_CLOSESESSION);
 	put32bit(&wptr,sessionid);
-	if (tcptowrite(fd,regbuff,8+64+5,1000)!=8+64+5) {
+	if (fs_write(fd,regbuff,8+64+5,1000)!=8+64+5) {
 		safs_pretty_syslog(LOG_WARNING,"master: close session error (write: %s)",strerr(tcpgetlasterror()));
 	}
 }
@@ -1271,7 +1354,7 @@ void* fs_nop_thread(void *arg) {
 				put32bit(&ptr, ANTOAN_NOP);  // cmd
 				put32bit(&ptr, 4);           // length
 				put32bit(&ptr, 0);           // msg id
-				if (tcptowrite(fd, hdr, kHeaderSize, 1000) != kHeaderSize) {
+				if (fs_write(fd, hdr, kHeaderSize, 1000) != kHeaderSize) {
 					safs::log_warn("Failed to send ANTOAN_NOP to master");
 					disconnect = true;
 				} else {
@@ -1295,7 +1378,7 @@ void* fs_nop_thread(void *arg) {
 					putINode(&ptr, inode);
 				}
 
-				if (tcptowrite(fd, inodespacket, inodesleng, 1000) != inodesleng) {
+				if (fs_write(fd, inodespacket, inodesleng, 1000) != inodesleng) {
 					safs::log_warn("Failed to send CLTOMA_FUSE_RESERVED_INODES to master");
 					disconnect = true;
 				} else {
@@ -1321,7 +1404,7 @@ void* fs_nop_thread(void *arg) {
 				std::vector<uint8_t> mountInfoPacket(messageLength);
 				std::copy(message.begin(), message.end(), mountInfoPacket.begin());
 
-				if (tcptowrite(fd, mountInfoPacket.data(), messageLength, 1000) !=
+				if (fs_write(fd, mountInfoPacket.data(), messageLength, 1000) !=
 				    (int32_t)messageLength) {
 					safs::log_warn("Failed to send mount info to master");
 					disconnect = true;
@@ -1346,7 +1429,7 @@ bool fs_append_from_master(MessageBuffer& buffer, uint32_t size) {
 	const uint32_t oldSize = buffer.size();
 	buffer.resize(oldSize + size);
 	uint8_t *appendPointer = buffer.data() + oldSize;
-	int r = tcptoread(fd, appendPointer, size, RECEIVE_TIMEOUT * 1000);
+	int r = fs_read(fd, appendPointer, size, RECEIVE_TIMEOUT * 1000);
 	if (r == 0) {
 		safs_pretty_syslog(LOG_WARNING,"master: connection lost");
 		setDisconnect(true);
@@ -1548,6 +1631,14 @@ int fs_init_master_connection(SaunaClient::FsInitParams &params
 	sessionid = 0;
 	disconnect = false;
 
+	if (params.tls_enabled) {
+		gGnutlsGlobalResources.reset(new GnuTlsGlobalResources());
+		gIsTlsEnabled = true;
+		tlsKeyFile = params.tls_key_file;
+		tlsCertFile = params.tls_cert_file;
+		tlsServerCaCertDir = params.tls_server_ca_cert_dir;
+	}
+
 	if (params.delayed_init) {
 		return 1;
 	}
@@ -1612,6 +1703,12 @@ void fs_term(void) {
 	acquiredFiles.clear();
 	af_lock.unlock();
 	fd_lock.lock();
+
+	if (gIsTlsEnabled) {
+		gnutls_bye(tlsSession->session(), GNUTLS_SHUT_WR);
+		gGnutlsGlobalResources.reset();
+	}
+
 	if (fd>=0) {
 		tcpclose(fd);
 	}
