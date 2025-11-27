@@ -93,7 +93,8 @@ setup_local_empty_saunafs() {
 	prepare_metalogger_
 	echo "$SAUNAFS_LOOP_DISKS"
 	cat /etc/saunafs_tests.conf
-	
+	sleep 5
+
 	# Start chunkservers, but first check if he have enough disks
 	if [[ ! $use_ramdisk ]]; then
 		if [[ $use_loop ]]; then
