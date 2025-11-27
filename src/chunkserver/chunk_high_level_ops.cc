@@ -85,6 +85,10 @@ void ReadHighLevelOp::delayedCloseCallback(uint8_t status, void *buffer) {
 
 	assert(pendingDelayedJobs_ > 0);
 	pendingDelayedJobs_--;
+	// safs::log_warn(
+	//     "({}) Delayed close finished for a read job. Remaining: {}. (readHLO "
+	//     "{})",
+	//     __func__, pendingDelayedJobs_, reinterpret_cast<uint64_t>(this));
 	checkAndApplyClosedOnParent();
 }
 
@@ -308,6 +312,8 @@ void ReadHighLevelOp::delayedClose() {
 	});
 
 	pendingDelayedJobs_ += toDiscardReadJobIds_.size();
+	safs::log_warn("({}) Delayed close started for {} read jobs. (readHLO {})", __func__,
+	               toDiscardReadJobIds_.size(), reinterpret_cast<uint64_t>(this));
 }
 
 void ReadHighLevelOp::cleanup() {

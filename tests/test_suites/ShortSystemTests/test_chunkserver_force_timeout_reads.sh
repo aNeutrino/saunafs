@@ -8,7 +8,7 @@ CHUNKSERVERS=2 \
 	USE_RAMDISK=YES \
 	MOUNT_EXTRA_CONFIG="sfscachemode=NEVER|maxreadaheadrequests=10|readaheadmaxwindowsize=65536|` \
 		`sfschunkserverwavereadto=30|sfschunkserverconnectreadto=30|sfschunkservertotalreadto=30" \
-	CHUNKSERVER_EXTRA_CONFIG="MAX_PARALLEL_HDD_READ_JOBS_PER_CS_ENTRY=8|`
+	CHUNKSERVER_EXTRA_CONFIG="MAX_PARALLEL_HDD_READ_JOBS_PER_CS_ENTRY=64|MAX_BLOCKS_PER_HDD_READ_JOB=1|NR_OF_HDD_WORKERS_PER_NETWORK_WORKER=32|NR_OF_NETWORK_WORKERS=1|`
 		`MAGIC_DEBUG_LOG=${TEMP_DIR}/log" \
 	setup_local_empty_saunafs info
 

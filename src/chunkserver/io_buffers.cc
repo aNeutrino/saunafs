@@ -387,12 +387,12 @@ void releaseOldIoBuffers(uint32_t expirationTime_ms) {
 	int releasedReplicatorBuffers =
 	    initialTotalReplicatorBufferBlocks - gCurrentTotalReplicatorBufferBlocks.load();
 	// Log the number of released buffers.
-	safs::log_debug("({}) Released buffer blocks per operation: read {}, write {}, replicate {}",
+	safs::log_warn("({}) Released buffer blocks per operation: read {}, write {}, replicate {}",
 	                __func__, releasedOutputBuffers, releasedInputBuffers,
 	                releasedReplicatorBuffers);
 
 	// Log the current amount of blocks buffers per operation.
-	safs::log_debug(
+	safs::log_warn(
 	    "({}) Current total buffer blocks per operation: read {}, write {}, replicate {}",
 	    __func__, gCurrentTotalOutputBufferBlocks.load(), gCurrentTotalInputBufferBlocks.load(),
 	    gCurrentTotalReplicatorBufferBlocks.load());

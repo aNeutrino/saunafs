@@ -946,7 +946,8 @@ void ChunkserverEntry::writeToSocket() {
 					"New bytes in pack->outputBuffer after sending some data");
 			stats_bytesout += (bytesInBufferBefore - bytesInBufferAfter);
 			if (ret == OutputBuffer::WriteStatus::Error) {
-				safs::log_info_with_error_code(errno, "({}) write error", __func__);
+				safs::log_info_with_error_code(errno, "({}) write error (readHLO: {})", __func__,
+				                               reinterpret_cast<uint64_t>(readHLO_.get()));
 				state = State::Close;
 				return;
 			} else if (ret == OutputBuffer::WriteStatus::Again) {
